@@ -1,6 +1,4 @@
 import numpy as np
-import pandas as pd
-from sklearn.preprocessing import MinMaxScaler
 
 class LSTMModel:
     def __init__(self, input_size, hidden_size, output_size=1):
