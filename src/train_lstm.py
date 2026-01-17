@@ -18,8 +18,8 @@ PREPROCESSED_DIR = os.path.join(DATA_DIR, 'preprocessed')
 OUTPUT_FILE = os.path.join(DATA_DIR, 'predictions.csv')
 
 # Hyperparameters
-HIDDEN_SIZE = 32
-EPOCHS = 5
+HIDDEN_SIZE = 64
+EPOCHS = 100
 LEARNING_RATE = 0.01
 TEST_SPLIT = 0.2
 
