@@ -160,13 +160,16 @@ class LSTMModelGPUOptimized:
         
         return grads
 
-    def update_adam(self, grads, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8):
-        """Adam optimizer update."""
+    def update_adam(self, grads, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8, lambda_l2=0.01):
         self.t += 1
-        
         for k in self.params:
-            self.m[k] = beta1 * self.m[k] + (1 - beta1) * grads[k]
-            self.v[k] = beta2 * self.v[k] + (1 - beta2) * (grads[k] ** 2)
+            # Add L2 regularization to gradients (only for weight matrices)
+            actual_grad = grads[k]
+            if k.startswith('W'):
+                actual_grad += lambda_l2 * self.params[k]
+                
+            self.m[k] = beta1 * self.m[k] + (1 - beta1) * actual_grad
+            self.v[k] = beta2 * self.v[k] + (1 - beta2) * (actual_grad ** 2)
             
             m_hat = self.m[k] / (1 - beta1 ** self.t)
             v_hat = self.v[k] / (1 - beta2 ** self.t)
@@ -223,7 +226,8 @@ class LSTMModelGPUOptimized:
         return avg_loss, accuracy
 
     def train(self, X_train, y_train, X_val=None, y_val=None, 
-              epochs=10, batch_size=64, lr=0.001, print_every=1):
+              epochs=10, batch_size=64, lr=0.001, print_every=1, 
+              patience=7, lambda_l2=0.01):
         """
         Batched training loop with optional validation tracking.
         
@@ -256,9 +260,14 @@ class LSTMModelGPUOptimized:
         
         has_validation = X_val is not None and y_val is not None
         
+        # Initialize Early Stopping
+        best_val_loss = float('inf')
+        wait = 0
+        best_params = None
+        
         print(f"Training: {n_samples} samples, {n_batches} batches/epoch, batch_size={batch_size}")
         if has_validation:
-            print(f"Validation: {len(X_val)} samples")
+            print(f"Validation: {len(X_val)} samples | Early stopping patience: {patience}")
         print("-" * 70)
         
         eps = 1e-9  # Prevent log(0)
@@ -306,6 +315,18 @@ class LSTMModelGPUOptimized:
                 val_loss, val_acc = self.evaluate(X_val, y_val, batch_size)
                 history['val_loss'].append(val_loss)
                 history['val_acc'].append(val_acc)
+                
+                # Early stopping check
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    wait = 0
+                    best_params = {k: v.copy() for k, v in self.params.items()}  # Save best weights
+                else:
+                    wait += 1
+                    if wait >= patience:
+                        print(f"\n🛑 Early stopping triggered at epoch {epoch+1}")
+                        self.params = best_params  # Restore best weights
+                        break
             
             if GPU_AVAILABLE:
                 cp.cuda.Stream.null.synchronize()
