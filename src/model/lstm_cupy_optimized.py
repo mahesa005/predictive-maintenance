@@ -21,10 +21,11 @@ class LSTMModelGPUOptimized:
     Batched LSTM for GPU - processes multiple samples simultaneously.
     """
     
-    def __init__(self, input_size, hidden_size, output_size=1):
+    def __init__(self, input_size, hidden_size, output_size=1, cw=1):
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.output_size = output_size
+        self.cw = cw
         
         z_dim = hidden_size + input_size
         scale = 0.1
@@ -90,7 +91,7 @@ class LSTMModelGPUOptimized:
         
         return y_pred.flatten(), caches, h, c
 
-    def backward_batch(self, y_pred, y_true, caches):
+    def backward_batch(self, y_pred, y_true, caches, cw=1):
         """
         Batched backward pass using BPTT.
         """
@@ -101,7 +102,12 @@ class LSTMModelGPUOptimized:
         grads = {k: cp.zeros_like(v) for k, v in self.params.items()}
         
         # Output gradient: (1, batch_size)
+        # Weighted Cross Entropy: Class 1 is 2.2x more important
+        weight_1 = cw
         dy = (y_pred - y_true).reshape(1, -1)
+        y_true_reshaped = y_true.reshape(1, -1)
+        # Perberat error untuk sampel yang label aslinya 1
+        dy = cp.where(y_true_reshaped == 1, dy * weight_1, dy)
         
         # Get final hidden state from last cache
         h_final = caches[-1][6]  # h_new from last timestep
@@ -216,8 +222,8 @@ class LSTMModelGPUOptimized:
             )
             total_loss += float(batch_loss) * len(y_batch)
             
-            # Accuracy
-            predictions = (y_pred >= 0.5).astype(cp.float32)
+            # Accuracy - lowered threshold for imbalanced data
+            predictions = (y_pred >= 0.3).astype(cp.float32)
             correct += int(cp.sum(predictions == y_batch))
         
         avg_loss = total_loss / n_samples
@@ -298,10 +304,10 @@ class LSTMModelGPUOptimized:
                 epoch_loss += float(loss)
                 
                 # Backward
-                grads = self.backward_batch(y_pred, y_batch, caches)
+                grads = self.backward_batch(y_pred, y_batch, caches, self.cw)
                 
                 # Update (Adam)
-                self.update_adam(grads, lr=lr)
+                self.update_adam(grads, lr=lr, lambda_l2=lambda_l2)
             
             avg_train_loss = epoch_loss / n_batches
             history['train_loss'].append(avg_train_loss)
