@@ -1,7 +1,7 @@
 import numpy as np
 import cupy as cp
 import pickle
-from src.model.lstm_cupy_optimized import LSTMModelGPUOptimized
+from ..model.lstm_cupy_optimized import LSTMModelGPUOptimized
 
 def save_model(model, filepath):
     # Konversi params dari CuPy ke NumPy
