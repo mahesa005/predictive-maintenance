@@ -17,7 +17,7 @@ except ImportError:
 import numpy as np
 
 
-class LSTMModelGPUOptimizedSGD:
+class LSTMModelGPUSGD:
     """
     Batched LSTM for GPU - processes multiple samples simultaneously.
     Uses simple SGD optimizer (no momentum, no Adam).
