@@ -291,10 +291,10 @@ class LSTMModelGPUOptimized:
         for epoch in range(epochs):
             # Shuffle data
             indices = cp.random.permutation(n_samples)
-            X_shuffled = X_gpu[indices]
-            y_shuffled = y_gpu[indices]
+            X_shuffled = X_gpu[indices]  # Shuffled input sequences
+            y_shuffled = y_gpu[indices]  # Shuffled labels
             
-            epoch_loss = 0
+            epoch_loss = 0 # Initialize epoch loss
             
             for batch_idx in range(n_batches):
                 start = batch_idx * batch_size
