@@ -79,11 +79,14 @@ class LSTMModelGPUOptimized:
             c_bar = cp.tanh(cp.dot(self.params['Wc'], z) + self.params['bc'])
             o = self.sigmoid(cp.dot(self.params['Wo'], z) + self.params['bo'])
             
-            # Cell and hidden state
+            # Calculate new cell and hidden state value
             c_new = f * c + i * c_bar
             h_new = o * cp.tanh(c_new)
             
+            # Save cache for backprop
             caches.append((z, f, i, c_bar, c_new, o, h_new, c, h))
+            
+            # Update hidden and cell state
             h, c = h_new, c_new
         
         # Output layer: (output_size, batch_size)
@@ -106,14 +109,21 @@ class LSTMModelGPUOptimized:
         weight_1 = cw
         dy = (y_pred - y_true).reshape(1, -1)
         y_true_reshaped = y_true.reshape(1, -1)
-        # Perberat error untuk sampel yang label aslinya 1
+        
+        # Adjust gradient for class 1 using class weight
         dy = cp.where(y_true_reshaped == 1, dy * weight_1, dy)
         
         # Get final hidden state from last cache
         h_final = caches[-1][6]  # h_new from last timestep
         
+        # Calculate gradients for output layer weight/neuron layer + bias
         grads['Wy'] = cp.dot(dy, h_final.T) / batch_size
         grads['by'] = cp.sum(dy, axis=1, keepdims=True) / batch_size
+
+        # IMPORTANT NOTE:
+        # All gradient values are divided by batch_size to average the gradients across the batches
+        # (Since each batch consists of different samples of the dataset, therefore having different y_true
+        # directly producing different gradients from every other batches).
         
         # Backprop through hidden state
         dh_next = cp.dot(self.params['Wy'].T, dy)
@@ -127,9 +137,9 @@ class LSTMModelGPUOptimized:
             # Output gate
             do = dh * cp.tanh(c)
             da_o = do * o * (1 - o)
-            grads['Wo'] += cp.dot(da_o, z.T) / batch_size
+            grads['Wo'] += cp.dot(da_o, z.T) / batch_size 
             grads['bo'] += cp.sum(da_o, axis=1, keepdims=True) / batch_size
-            
+
             # Cell state
             dc = dh * o * (1 - cp.tanh(c)**2) + dc_next
             
@@ -162,7 +172,7 @@ class LSTMModelGPUOptimized:
         
         # Gradient clipping
         for k in grads:
-            grads[k] = cp.clip(grads[k], -5, 5)
+            grads[k] = cp.clip(grads[k], -5, 5) # Prevent exploding gradients, forces the gradients to be in the range of [-5, 5]
         
         return grads
 
