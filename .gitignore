@@ -135,7 +135,7 @@ Thumbs.db
 
 # Model files (if they are large)
 *.h5
-*.pkl
+# *.pkl
 *.joblib
 *.model
 
