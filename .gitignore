@@ -142,3 +142,7 @@ Thumbs.db
 # Temporary files
 *.tmp
 /tmp/
+
+# Data files (exclude all except output folder)
+data/*
+!data/output/

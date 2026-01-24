@@ -4,6 +4,6 @@
 # Except this .gitignore file itself
 !.gitignore
 
-# You can add specific exceptions if needed
-# For example, to allow sample data:
-# !sample_data.csv
+# Allow output folder and its contents
+!output/
+!output/**
