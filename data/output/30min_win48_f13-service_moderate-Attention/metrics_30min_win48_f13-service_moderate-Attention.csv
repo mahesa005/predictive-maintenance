@@ -1,2 +1,3 @@
-Model,ROC_AUC,PR_AUC,TrainingTime,Std_Threshold,Std_Accuracy,Std_Precision,Std_Recall,Std_F1,Opt_Threshold,Opt_Accuracy,Opt_Precision,Opt_Recall,Opt_F1,Epochs,Batch_Size,LR,Optimizer,Rolling_Means
-30min|win=48|f=13-service_moderate-Attention,0.9090454823926429,0.9263561182999963,1197.096664905548,0.5,0.8281829419035847,0.8600108518719479,0.7838773491592482,0.8201811125485123,0.430463969707489,0.8252163164400494,0.8246913580246914,0.8259149357072205,0.825302693353101,100,128,0.001,SGD,N/A
+version https://git-lfs.github.com/spec/v1
+oid sha256:16e7fabb8a48719c7e25b46fd7d7648ca42898b7289f300a78ef0dc300c8b3b4
+size 493
