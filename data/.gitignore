@@ -3,7 +3,6 @@
 
 # Except this .gitignore file itself
 !.gitignore
-!*.csv
 
 # Allow output folder and its contents
 !output/
