@@ -146,3 +146,23 @@ Thumbs.db
 # Data files (exclude all except output folder)
 data/*
 !data/output/
+
+# Unsloth cache and compiled files
+.unsloth_cache/
+unsloth_cache/
+unsloth_compiled_cache/
+*.unsloth
+*_unsloth/
+outputs/
+checkpoints/
+runs/
+
+# HuggingFace cache
+.cache/
+huggingface/
+transformers_cache/
+
+# Model training outputs
+wandb/
+tensorboard/
+lightning_logs/
