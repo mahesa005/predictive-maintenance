@@ -7,3 +7,5 @@
 # Allow output folder and its contents
 !output/
 !output/**
+!output_kfold
+!output_kfold/**
