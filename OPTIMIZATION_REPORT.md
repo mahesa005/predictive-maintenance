@@ -271,194 +271,773 @@ FEATURE_COLS = f13 + [
 
 ---
 
-## 5. Model Architectures Tested
+## 5. LSTM Implementation from Scratch
 
-### 5.1 Base Architectures
+This project implements LSTM (Long Short-Term Memory) networks entirely from scratch using NumPy/CuPy, without relying on deep learning frameworks like TensorFlow or PyTorch. This section provides comprehensive documentation of the implementation, covering both conceptual understanding and technical details.
 
-#### **Standard LSTM (Optimized)**
+### 5.1 Baseline LSTM: Conceptual Overview
+
+#### **What is LSTM?**
+
+LSTM (Long Short-Term Memory) is a type of Recurrent Neural Network (RNN) designed to learn long-term dependencies in sequential data. Unlike vanilla RNNs, which suffer from vanishing gradients when processing long sequences, LSTMs use a **gating mechanism** to selectively remember or forget information.
+
+**The Key Insight:** LSTMs maintain two separate state vectors:
+1. **Cell State (c):** The "long-term memory" that flows through time with minimal modification
+2. **Hidden State (h):** The "short-term memory" or working memory used for predictions
+
+**Why Gates?** Instead of having the network learn what to remember directly (which fails due to vanishing gradients), LSTMs learn **when to remember** through multiplicative gates. These gates are differentiable switches (values between 0-1) that control information flow.
+
+#### **The Four Gates of LSTM**
+
+```
+                    ┌─────────────────────────────────────────────────────────┐
+                    │                     LSTM Cell                           │
+   c_{t-1} ─────────┼──────[×]────────────[+]────────────────────────────────┼──── c_t
+                    │        ↑              ↑                                 │
+                    │      f_t           i_t × c̃_t                            │
+                    │   (forget)         (input)                              │
+                    │        ↑              ↑                                 │
+                    │     ┌──┴──┐        ┌──┴──┐      ┌──────┐               │
+                    │     │  σ  │        │  σ  │ tanh │      │               │
+                    │     └──┬──┘        └──┬──┘      └──┬───┘               │
+   h_{t-1} ─────────┼───────┼──────────────┼───────────┼─────────[×]─────────┼──── h_t
+                    │       └──────────────┴───────────┘          ↑          │
+                    │                 z = [h_{t-1}; x_t]          │          │
+                    │                                           o_t × tanh(c_t)
+   x_t ─────────────┼─────────────────────────────────────────────┘          │
+                    └─────────────────────────────────────────────────────────┘
+```
+
+| Gate | Symbol | Activation | Purpose |
+|------|--------|------------|---------|
+| **Forget Gate** | f_t | Sigmoid (0-1) | Decides what to discard from cell state |
+| **Input Gate** | i_t | Sigmoid (0-1) | Decides what new information to add |
+| **Candidate** | c̃_t | Tanh (-1 to 1) | Proposes new information to potentially add |
+| **Output Gate** | o_t | Sigmoid (0-1) | Decides what to output from cell state |
+
+---
+
+### 5.2 Baseline LSTM: Technical Implementation
+
 **File:** `src/model/lstm_cupy_optimized.py`
 
-The baseline LSTM implementation with Adam optimizer and GPU acceleration via CuPy.
+#### **5.2.1 Parameter Initialization**
+
+The LSTM has the following learnable parameters:
 
 ```python
-# Standard LSTM cell update
-f = sigmoid(Wf @ z + bf)       # Forget gate
-i = sigmoid(Wi @ z + bi)       # Input gate
-c_bar = tanh(Wc @ z + bc)      # Candidate
-o = sigmoid(Wo @ z + bo)       # Output gate
+# Dimensions
+input_size = 19      # Number of input features (e.g., f19-ultimate)
+hidden_size = 128    # Number of hidden units
+z_dim = hidden_size + input_size  # Concatenated input dimension = 147
 
-c_new = f * c_prev + i * c_bar  # Cell state
-h_new = o * tanh(c_new)         # Hidden state
+# Gate weight matrices: (hidden_size, z_dim) = (128, 147)
+Wf, Wi, Wc, Wo ∈ ℝ^(128 × 147)
+
+# Gate bias vectors: (hidden_size, 1) = (128, 1)
+bf, bi, bc, bo ∈ ℝ^(128 × 1)
+
+# Output layer
+Wy ∈ ℝ^(1 × 128)    # Output weights
+by ∈ ℝ^(1 × 1)      # Output bias
 ```
 
-**Key Features:**
-- Batched operations for GPU parallelism
-- Adam optimizer with L2 regularization
-- Gradient clipping at ±5
+**Xavier-like Initialization:** Weights are initialized with small random values (scale=0.1) to prevent exploding activations:
+
+```python
+self.params = {
+    'Wf': cp.random.randn(hidden_size, z_dim).astype(cp.float32) * 0.1,
+    'Wi': cp.random.randn(hidden_size, z_dim).astype(cp.float32) * 0.1,
+    'Wc': cp.random.randn(hidden_size, z_dim).astype(cp.float32) * 0.1,
+    'Wo': cp.random.randn(hidden_size, z_dim).astype(cp.float32) * 0.1,
+    'Wy': cp.random.randn(output_size, hidden_size).astype(cp.float32) * 0.1,
+    'bf': cp.zeros((hidden_size, 1)),  # Biases start at zero
+    'bi': cp.zeros((hidden_size, 1)),
+    'bc': cp.zeros((hidden_size, 1)),
+    'bo': cp.zeros((hidden_size, 1)),
+    'by': cp.zeros((output_size, 1)),
+}
+```
+
+**Total Parameters:** For hidden_size=128, input_size=19:
+- Gate weights: 4 × 128 × 147 = 75,264
+- Gate biases: 4 × 128 = 512
+- Output layer: 128 + 1 = 129
+- **Total: ~75,905 parameters**
+
+#### **5.2.2 Forward Pass (Inference)**
+
+The forward pass processes a sequence of inputs and produces a prediction.
+
+**Input Shape:** `X_batch = (batch_size, seq_len, input_size)` e.g., `(128, 48, 19)`
+
+```python
+def forward_batch(self, X_batch):
+    batch_size, seq_len, _ = X_batch.shape
+
+    # Initialize states to zeros: (hidden_size, batch_size) = (128, 128)
+    h = cp.zeros((self.hidden_size, batch_size), dtype=cp.float32)
+    c = cp.zeros((self.hidden_size, batch_size), dtype=cp.float32)
+
+    caches = []  # Store intermediate values for backpropagation
+
+    # Process each timestep t = 0, 1, ..., 47
+    for t in range(seq_len):
+        # Extract input at timestep t: (input_size, batch_size) = (19, 128)
+        x_t = X_batch[:, t, :].T
+
+        # Step 1: Concatenate h and x → z: (147, 128)
+        z = cp.vstack((h, x_t))
+
+        # Step 2: Compute gates (all parallelized across batch)
+        f = sigmoid(Wf @ z + bf)      # Forget gate: (128, 128)
+        i = sigmoid(Wi @ z + bi)      # Input gate: (128, 128)
+        c_bar = tanh(Wc @ z + bc)     # Candidate: (128, 128)
+        o = sigmoid(Wo @ z + bo)      # Output gate: (128, 128)
+
+        # Step 3: Update cell state
+        # c_new = (what to keep from old) + (what to add new)
+        c_new = f * c + i * c_bar     # Element-wise: (128, 128)
+
+        # Step 4: Compute new hidden state
+        h_new = o * tanh(c_new)       # Element-wise: (128, 128)
+
+        # Save for backpropagation
+        caches.append((z, f, i, c_bar, c_new, o, h_new, c, h))
+
+        # Update states for next timestep
+        h, c = h_new, c_new
+
+    # Step 5: Output layer (after processing all timesteps)
+    # Use final hidden state h_T for prediction
+    y_pred = sigmoid(Wy @ h + by)     # (1, 128) → probabilities
+
+    return y_pred.flatten(), caches, h, c
+```
+
+**Activation Functions:**
+
+```python
+def sigmoid(x):
+    """Maps any value to (0, 1) - used for gates"""
+    return 1 / (1 + exp(-clip(x, -500, 500)))  # Clipping prevents overflow
+
+def tanh(x):
+    """Maps any value to (-1, 1) - used for candidate and cell state output"""
+    return (exp(x) - exp(-x)) / (exp(x) + exp(-x))
+```
+
+#### **5.2.3 Backward Pass (Backpropagation Through Time - BPTT)**
+
+Backpropagation computes gradients of the loss with respect to all parameters, allowing the optimizer to update weights.
+
+**Loss Function:** Binary Cross-Entropy (BCE) with optional class weighting
+
+```
+L = -1/N Σ [w_1 · y · log(ŷ) + (1-y) · log(1-ŷ)]
+```
+
+where w_1 is the class weight for positive samples (to handle imbalance).
+
+**Chain Rule Application:**
+
+The key insight is that we need to propagate gradients backward through time, from t=T to t=0.
+
+```python
+def backward_batch(self, y_pred, y_true, caches, cw=1):
+    batch_size = len(y_true)
+    seq_len = len(caches)
+
+    # Initialize gradients dictionary
+    grads = {k: cp.zeros_like(v) for k, v in self.params.items()}
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 1: Output Layer Gradient
+    # ═══════════════════════════════════════════════════════════
+    # Loss: L = -[y·log(ŷ) + (1-y)·log(1-ŷ)]
+    # dL/dŷ = (ŷ - y) / (ŷ(1-ŷ))
+    # For sigmoid output: dL/d(pre_activation) = ŷ - y
+
+    dy = (y_pred - y_true).reshape(1, -1)  # (1, batch_size)
+
+    # Apply class weight: penalize mistakes on positive class more
+    dy = cp.where(y_true == 1, dy * cw, dy)
+
+    # Get final hidden state
+    h_final = caches[-1][6]  # h_new from last timestep
+
+    # Gradient for output weights: dL/dWy = dy @ h.T
+    grads['Wy'] = cp.dot(dy, h_final.T) / batch_size
+    grads['by'] = cp.sum(dy, axis=1, keepdims=True) / batch_size
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 2: Backpropagate Through Hidden State
+    # ═══════════════════════════════════════════════════════════
+    # y = sigmoid(Wy @ h + by)
+    # dL/dh = Wy.T @ dy
+
+    dh_next = cp.dot(self.params['Wy'].T, dy)  # (hidden_size, batch_size)
+    dc_next = cp.zeros((self.hidden_size, batch_size))
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 3: BPTT - Backward Through Time (t = T-1 to 0)
+    # ═══════════════════════════════════════════════════════════
+    for t in reversed(range(seq_len)):
+        z, f, i, c_bar, c, o, h, c_prev, h_prev = caches[t]
+
+        dh = dh_next
+
+        # ─────────────────────────────────────────────────────
+        # OUTPUT GATE GRADIENT
+        # h = o * tanh(c)
+        # dL/do = dL/dh * tanh(c)
+        # ─────────────────────────────────────────────────────
+        do = dh * cp.tanh(c)
+        # Sigmoid derivative: σ'(x) = σ(x)(1 - σ(x))
+        da_o = do * o * (1 - o)
+
+        grads['Wo'] += cp.dot(da_o, z.T) / batch_size
+        grads['bo'] += cp.sum(da_o, axis=1, keepdims=True) / batch_size
+
+        # ─────────────────────────────────────────────────────
+        # CELL STATE GRADIENT
+        # h = o * tanh(c)
+        # dL/dc = dL/dh * o * (1 - tanh²(c)) + dc_next
+        # ─────────────────────────────────────────────────────
+        dc = dh * o * (1 - cp.tanh(c)**2) + dc_next
+
+        # ─────────────────────────────────────────────────────
+        # CANDIDATE GRADIENT
+        # c = f * c_prev + i * c_bar
+        # dL/dc_bar = dL/dc * i
+        # ─────────────────────────────────────────────────────
+        dc_bar = dc * i
+        # Tanh derivative: tanh'(x) = 1 - tanh²(x)
+        da_c = dc_bar * (1 - c_bar**2)
+
+        grads['Wc'] += cp.dot(da_c, z.T) / batch_size
+        grads['bc'] += cp.sum(da_c, axis=1, keepdims=True) / batch_size
+
+        # ─────────────────────────────────────────────────────
+        # INPUT GATE GRADIENT
+        # c = f * c_prev + i * c_bar
+        # dL/di = dL/dc * c_bar
+        # ─────────────────────────────────────────────────────
+        di = dc * c_bar
+        da_i = di * i * (1 - i)  # Sigmoid derivative
+
+        grads['Wi'] += cp.dot(da_i, z.T) / batch_size
+        grads['bi'] += cp.sum(da_i, axis=1, keepdims=True) / batch_size
+
+        # ─────────────────────────────────────────────────────
+        # FORGET GATE GRADIENT
+        # c = f * c_prev + i * c_bar
+        # dL/df = dL/dc * c_prev
+        # ─────────────────────────────────────────────────────
+        df = dc * c_prev
+        da_f = df * f * (1 - f)  # Sigmoid derivative
+
+        grads['Wf'] += cp.dot(da_f, z.T) / batch_size
+        grads['bf'] += cp.sum(da_f, axis=1, keepdims=True) / batch_size
+
+        # ─────────────────────────────────────────────────────
+        # GRADIENTS FOR PREVIOUS TIMESTEP
+        # z = [h_{t-1}; x_t]
+        # dL/dz = sum of gradients from all gates
+        # ─────────────────────────────────────────────────────
+        dz = (cp.dot(Wf.T, da_f) + cp.dot(Wi.T, da_i) +
+              cp.dot(Wc.T, da_c) + cp.dot(Wo.T, da_o))
+
+        # Split gradient: dz = [dh_prev; dx_t]
+        dh_next = dz[:self.hidden_size, :]  # Gradient to previous h
+
+        # Cell state gradient through forget gate
+        dc_next = f * dc  # Critical for long-term memory!
+
+    # ═══════════════════════════════════════════════════════════
+    # STEP 4: Gradient Clipping (Prevent Exploding Gradients)
+    # ═══════════════════════════════════════════════════════════
+    for k in grads:
+        grads[k] = cp.clip(grads[k], -5, 5)
+
+    return grads
+```
+
+**Why Gradient Clipping?** Long sequences (48 timesteps) can cause gradients to explode during BPTT. Clipping at ±5 stabilizes training.
 
 ---
 
-#### **Nested LSTM**
+### 5.3 Adam Optimizer
+
+Adam (Adaptive Moment Estimation) combines the benefits of:
+1. **Momentum:** Uses exponential moving average of gradients (helps escape local minima)
+2. **RMSprop:** Uses exponential moving average of squared gradients (adapts learning rate per parameter)
+
+**Mathematical Formulation:**
+
+```
+For each parameter θ at timestep t:
+
+1. Compute gradient: g_t = ∇L(θ)
+
+2. Update biased first moment (momentum):
+   m_t = β₁ · m_{t-1} + (1 - β₁) · g_t
+
+3. Update biased second moment (RMSprop):
+   v_t = β₂ · v_{t-1} + (1 - β₂) · g_t²
+
+4. Bias correction (important in early training):
+   m̂_t = m_t / (1 - β₁^t)
+   v̂_t = v_t / (1 - β₂^t)
+
+5. Update parameters:
+   θ_t = θ_{t-1} - α · m̂_t / (√v̂_t + ε)
+```
+
+**Hyperparameters:**
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| α (lr) | 0.001 | Base learning rate |
+| β₁ | 0.9 | Momentum decay (how much past gradients matter) |
+| β₂ | 0.999 | RMSprop decay (how much past squared gradients matter) |
+| ε | 1e-8 | Prevents division by zero |
+| λ (L2) | 0.01 | L2 regularization strength |
+
+**Implementation:**
+
+```python
+def update_adam(self, grads, lr=0.001, beta1=0.9, beta2=0.999, eps=1e-8, lambda_l2=0.01):
+    self.t += 1  # Increment timestep for bias correction
+
+    for k in self.params:
+        # Add L2 regularization to weight gradients
+        actual_grad = grads[k]
+        if k.startswith('W'):
+            actual_grad += lambda_l2 * self.params[k]
+
+        # Update biased moments
+        self.m[k] = beta1 * self.m[k] + (1 - beta1) * actual_grad
+        self.v[k] = beta2 * self.v[k] + (1 - beta2) * (actual_grad ** 2)
+
+        # Bias correction
+        m_hat = self.m[k] / (1 - beta1 ** self.t)
+        v_hat = self.v[k] / (1 - beta2 ** self.t)
+
+        # Parameter update
+        self.params[k] -= lr * m_hat / (cp.sqrt(v_hat) + eps)
+```
+
+**Why Adam?**
+- **Adaptive learning rates:** Each parameter gets its own effective learning rate based on gradient history
+- **Handles sparse gradients:** Works well with varying gradient magnitudes across features
+- **Bias correction:** Prevents early training instability
+
+---
+
+### 5.4 Architecture Variations
+
+Each architecture variation modifies specific components of the baseline LSTM. This section details **exactly what changes** in forward and backward passes.
+
+#### **5.4.1 Nested LSTM**
 **File:** `src/model/lstm_nested.py`
 
-Hierarchical cell state with inner gates for improved long-term memory.
+**Concept:** Adds an **inner LSTM** within the cell state update, creating a hierarchical memory system with two paths for gradient flow.
+
+**Modification to Forward Pass:**
 
 ```python
-# Outer gates (standard)
+# BASELINE LSTM:
+c_new = f * c_prev + i * c_bar
+
+# NESTED LSTM:
+# Step 1: Compute temporary cell state (same as baseline)
 c_temp = f * c_prev + i * c_bar
 
-# Inner gates (nested)
-f_inner = sigmoid(Wf_i @ z + bf_i)
-i_inner = sigmoid(Wi_i @ z + bi_i)
-
-# Hierarchical update
-c_new = f_inner * c_prev + i_inner * tanh(c_temp)
+# Step 2: Apply INNER gates to create final cell state
+f_inner = sigmoid(Wf_i @ z + bf_i)  # Inner forget gate
+i_inner = sigmoid(Wi_i @ z + bi_i)  # Inner input gate
+c_new = f_inner * c_prev + i_inner * tanh(c_temp)  # Hierarchical update
 ```
 
-**Theoretical Advantage:**
-- Dual memory paths prevent vanishing gradients on long sequences
-- Outer cell tracks immediate changes, inner cell maintains historical context
-- Gradient flows through both `f * c_prev` AND `f_inner * c_prev`
+**Why This Works:** The gradient now has TWO paths to flow back through time:
+1. **Outer path:** Through `f * c_prev` in c_temp
+2. **Inner path:** Through `f_inner * c_prev` directly
 
-**Reference:** Moniz & Krueger, "Nested LSTMs" (2017)
+```
+Gradient paths:
+dc_prev = dc_temp * f        (outer: short-term patterns)
+        + dc * f_inner       (inner: long-term patterns)
+```
+
+**Modification to Backward Pass:**
+
+```python
+# Additional gradients for inner gates
+tanh_c_temp = cp.tanh(c_temp)
+
+# Inner input gate gradient: dc/di_inner = tanh(c_temp)
+di_inner = dc * tanh_c_temp
+da_i_inner = di_inner * i_inner * (1 - i_inner)
+grads['Wi_i'] += cp.dot(da_i_inner, z.T) / batch_size
+
+# Inner forget gate gradient: dc/df_inner = c_prev
+df_inner = dc * c_prev
+da_f_inner = df_inner * f_inner * (1 - f_inner)
+grads['Wf_i'] += cp.dot(da_f_inner, z.T) / batch_size
+
+# Gradient through tanh(c_temp)
+dc_temp = dc * i_inner * (1 - tanh_c_temp**2)
+
+# dc_next now has contributions from BOTH paths
+dc_next = dc_temp * f + dc * f_inner
+```
+
+**Additional Parameters:** +2 weight matrices (Wf_i, Wi_i) and +2 bias vectors (bf_i, bi_i)
 
 ---
 
-#### **CIFG LSTM (Coupled Input-Forget Gate)**
+#### **5.4.2 CIFG (Coupled Input-Forget Gate)**
 **File:** `src/model/lstm_cifg.py`
 
-Reduces parameters by coupling input and forget gates.
+**Concept:** Eliminates the input gate by coupling it with the forget gate: `i = 1 - f`. This enforces that old + new information always sums to 1.
+
+**Modification to Forward Pass:**
 
 ```python
-# Coupled gates: i = 1 - f
+# BASELINE LSTM:
 f = sigmoid(Wf @ z + bf)
-i = 1 - f  # No separate Wi, bi
+i = sigmoid(Wi @ z + bi)  # Separate input gate
 
-c_new = f * c_prev + (1 - f) * c_bar
+# CIFG LSTM:
+f = sigmoid(Wf @ z + bf)
+i = 1 - f                  # Coupled: no separate Wi, bi!
+
+# Cell update unchanged:
+c_new = f * c_prev + i * c_bar
+# Equivalent to: c_new = f * c_prev + (1-f) * c_bar
 ```
 
-**Theoretical Advantage:**
-- 25% parameter reduction
-- Enforces constraint: total contribution of old + new = 1
-- Faster training with similar performance
+**Modification to Backward Pass:**
 
-**Reference:** Greff et al., "LSTM: A Search Space Odyssey" (2017)
+```python
+# The gradient that would go to input gate now affects forget gate
+# Since i = 1 - f, we have di/df = -1
+
+# Original gradients
+df = dc * c_prev          # From forget path
+di = dc * c_bar           # From input path (would go to Wi)
+
+# Combined gradient (input gradient negated and added to forget)
+df_combined = df - di     # Key change!
+
+da_f = df_combined * f * (1 - f)
+grads['Wf'] += cp.dot(da_f, z.T) / batch_size
+
+# No Wi, bi gradients needed!
+```
+
+**Parameter Reduction:** Removes Wi and bi → ~25% fewer parameters
 
 ---
 
-#### **Peephole LSTM**
+#### **5.4.3 Peephole LSTM**
 **File:** `src/model/lstm_peephole.py`
 
-Gates can directly observe cell state for improved memory access.
+**Concept:** Gates can directly "peek" at the cell state, allowing more precise timing decisions.
+
+**Modification to Forward Pass:**
 
 ```python
-# Peephole connections
-f = sigmoid(Wf @ z + Vf * c_prev + bf)  # See previous cell state
-i = sigmoid(Wi @ z + Vi * c_prev + bi)
-o = sigmoid(Wo @ z + Vo * c_new + bo)   # See current cell state
+# BASELINE LSTM:
+f = sigmoid(Wf @ z + bf)
+i = sigmoid(Wi @ z + bi)
+o = sigmoid(Wo @ z + bo)
+
+# PEEPHOLE LSTM:
+# Forget and input gates see PREVIOUS cell state
+f = sigmoid(Wf @ z + Vf * c_prev + bf)  # Peephole from c_{t-1}
+i = sigmoid(Wi @ z + Vi * c_prev + bi)  # Peephole from c_{t-1}
+
+c_new = f * c_prev + i * c_bar  # Same as baseline
+
+# Output gate sees CURRENT cell state
+o = sigmoid(Wo @ z + Vo * c_new + bo)  # Peephole from c_t!
+
+h_new = o * tanh(c_new)
 ```
 
-**Theoretical Advantage:**
-- Gates make decisions based on actual memory content
-- Improved precision for timing-based tasks
+**Modification to Backward Pass:**
+
+```python
+# Additional peephole gradients
+# V parameters are element-wise multiplied with cell state
+
+# Output gate peephole: uses c_t (current cell state)
+grads['Vo'] += cp.sum(da_o * c, axis=1, keepdims=True) / batch_size
+
+# Input gate peephole: uses c_prev
+grads['Vi'] += cp.sum(da_i * c_prev, axis=1, keepdims=True) / batch_size
+
+# Forget gate peephole: uses c_prev
+grads['Vf'] += cp.sum(da_f * c_prev, axis=1, keepdims=True) / batch_size
+
+# dc also receives gradient through output gate peephole
+dc += da_o * self.params['Vo']
+
+# dc_next receives gradient through f and i peepholes
+dc_next = f * dc + da_f * Vf + da_i * Vi
+```
+
+**Additional Parameters:** +3 peephole vectors (Vf, Vi, Vo) of size hidden_size each
 
 ---
 
-#### **Bidirectional LSTM**
+#### **5.4.4 Bidirectional LSTM**
 **File:** `src/model/lstm_bidirectional.py`
 
-Processes sequence in both directions for complete context.
+**Concept:** Processes the sequence in both forward and backward directions, then concatenates the final states.
 
-```python
-# Forward: t = 0 → T
-for t in range(seq_len):
-    h_f, c_f = lstm_cell_forward(x_t, h_f, c_f)
+**Architecture:**
 
-# Backward: t = T → 0
-for t in reversed(range(seq_len)):
-    h_b, c_b = lstm_cell_backward(x_t, h_b, c_b)
+```
+Forward:  x_0 → x_1 → ... → x_T → h_f
+Backward: x_0 ← x_1 ← ... ← x_T → h_b
 
-# Combine
-h_combined = concatenate([h_f[-1], h_b[0]])
+Output: y = sigmoid(Wy @ [h_f; h_b] + by)
 ```
 
-**Theoretical Advantage:**
-- Access to future context (useful for offline analysis)
-- Doubled effective memory capacity
+**Modification to Forward Pass:**
 
-**Limitation for Predictive Maintenance:** Requires complete sequence; not suitable for real-time streaming.
+```python
+def forward_batch(self, X_batch):
+    batch_size, seq_len, _ = X_batch.shape
+
+    # Separate states for each direction
+    h_f, c_f = zeros(), zeros()
+    h_b, c_b = zeros(), zeros()
+
+    # Forward pass: t = 0, 1, ..., T-1
+    for t in range(seq_len):
+        x_t = X_batch[:, t, :].T
+        h_f, c_f = lstm_cell(x_t, h_f, c_f, params='_f')
+
+    # Backward pass: t = T-1, T-2, ..., 0
+    for t in reversed(range(seq_len)):
+        x_t = X_batch[:, t, :].T
+        h_b, c_b = lstm_cell(x_t, h_b, c_b, params='_b')
+
+    # Concatenate final states: (2*hidden_size, batch_size)
+    h_combined = vstack((h_f, h_b))
+
+    # Output uses concatenated representation
+    y_pred = sigmoid(Wy @ h_combined + by)  # Wy is now (1, 2*hidden_size)
+
+    return y_pred
+```
+
+**Modification to Backward Pass:**
+
+```python
+# Split gradient to both directions
+dh_combined = Wy.T @ dy  # (2*hidden_size, batch_size)
+dh_f = dh_combined[:hidden_size, :]
+dh_b = dh_combined[hidden_size:, :]
+
+# BPTT for forward LSTM (t = T-1 → 0)
+for t in reversed(range(seq_len)):
+    # Standard BPTT with '_f' parameters
+
+# BPTT for backward LSTM (t = 0 → T-1)
+for t in range(seq_len):
+    # Standard BPTT with '_b' parameters
+```
+
+**Parameter Count:** ~2x parameters (separate weights for forward/backward)
 
 ---
 
-#### **GLU LSTM (Gated Linear Unit)**
+#### **5.4.5 GLU (Gated Linear Unit) LSTM**
 **File:** `src/model/lstm_glu.py`
 
-Replaces tanh activation with learnable gating for improved gradient flow.
+**Concept:** Replaces `tanh` in candidate with a learnable gating mechanism, providing a linear path for gradients.
+
+**Modification to Forward Pass:**
 
 ```python
-# Standard: c_bar = tanh(Wc @ z + bc)
-# GLU: c_bar = A * sigmoid(B)
-A = Wc @ z + bc           # Linear projection
-B = W_glu @ z + b_glu     # Gate projection
-c_bar = A * sigmoid(B)    # Gated output
+# BASELINE LSTM:
+c_bar = tanh(Wc @ z + bc)
+
+# GLU LSTM:
+A = Wc @ z + bc           # Linear projection (same weights)
+B = W_glu @ z + b_glu     # Gate projection (new weights)
+gate_B = sigmoid(B)
+c_bar = A * gate_B        # GLU output: A ⊙ σ(B)
 ```
 
-**Theoretical Advantage:**
-- Linear path through A improves gradient flow
-- Learnable activation adapts to data
-- Better stability on noisy data
+**Why GLU?**
+- **Linear path through A:** Gradients flow directly without squashing
+- **Learnable gate B:** Network learns which parts of A to keep
+- **Better stability:** No saturation like tanh(-5) ≈ -1
 
-**Reference:** Dauphin et al., "Language Modeling with Gated Convolutional Networks" (2017)
+**Modification to Backward Pass:**
+
+```python
+# GLU gradient: c_bar = A * sigmoid(B)
+# dc_bar/dA = sigmoid(B) = gate_B
+# dc_bar/dB = A * sigmoid(B) * (1 - sigmoid(B)) = A * gate_B * (1 - gate_B)
+
+dc_bar = dc * i
+
+# Gradient for A (linear path)
+dA = dc_bar * gate_B
+grads['Wc'] += cp.dot(dA, z.T) / batch_size
+grads['bc'] += cp.sum(dA, axis=1, keepdims=True) / batch_size
+
+# Gradient for B (gate path)
+dB = dc_bar * A * gate_B * (1 - gate_B)
+grads['W_glu'] += cp.dot(dB, z.T) / batch_size
+grads['b_glu'] += cp.sum(dB, axis=1, keepdims=True) / batch_size
+
+# dz now includes contribution from GLU gate
+dz = ... + cp.dot(W_glu.T, dB)
+```
+
+**Additional Parameters:** +1 weight matrix (W_glu) and +1 bias vector (b_glu)
 
 ---
 
-### 5.2 Attention Mechanism
+### 5.5 Attention Mechanism
 
 **File:** `src/model/lstm_attention_optimized.py`
 
-Global attention over all hidden states enables focus on relevant timesteps.
+**Concept:** Instead of using only the final hidden state h_T, attention computes a weighted sum of ALL hidden states, allowing the model to focus on the most relevant timesteps.
+
+#### **5.5.1 Attention Forward Pass**
 
 ```python
-# Compute attention scores
-for t in range(seq_len):
-    e_t = v_att.T @ tanh(W_att @ h_t)  # Scalar score per timestep
+def forward_batch(self, X_batch):
+    # Step 1: Run standard LSTM, but save ALL hidden states
+    all_h = []
+    for t in range(seq_len):
+        h, c = lstm_step(x_t, h, c)
+        all_h.append(h)
 
-# Normalize with softmax
-alpha = softmax(e)  # (seq_len,) attention weights
+    # Stack: H = (seq_len, hidden_size, batch_size)
+    H = cp.stack(all_h, axis=0)
 
-# Context vector
-context = sum(alpha_t * h_t for all t)
+    # Step 2: Compute attention scores
+    # For each timestep t, compute: e_t = v_att^T @ tanh(W_att @ h_t)
 
-# Output
-y_pred = sigmoid(Wy @ context + by)
+    # S = tanh(W_att @ H) for all timesteps
+    S = cp.tanh(W_att @ H)  # (seq_len, hidden_size, batch_size)
+
+    # e = v_att^T @ S → scalar score per timestep
+    e = v_att.T @ S         # (seq_len, batch_size)
+
+    # Step 3: Softmax to get attention weights
+    # α_t = exp(e_t) / Σ exp(e_j)
+    e_exp = cp.exp(e - cp.max(e, axis=0))  # Numerical stability
+    alpha = e_exp / cp.sum(e_exp, axis=0)  # (seq_len, batch_size)
+
+    # Step 4: Compute context vector (weighted sum)
+    # context = Σ α_t * h_t
+    context = cp.sum(alpha[:, None, :] * H, axis=0)  # (hidden_size, batch_size)
+
+    # Step 5: Output using context instead of final hidden state
+    y_pred = sigmoid(Wy @ context + by)
+
+    return y_pred
 ```
 
-**Visualization of Attention:**
+**Attention Visualization:**
 ```
 Timestep:  t-47  t-46  ...  t-5   t-4   t-3   t-2   t-1   t
+Hidden:    h_0   h_1   ...  h_43  h_44  h_45  h_46  h_47
 Weight:    0.01  0.01  ...  0.05  0.08  0.15  0.25  0.35  0.10
                               ↑     ↑     ↑     ↑     ↑
-                           Attention focuses on recent high-impact events
+                           Model attends to recent high-impact events
 ```
 
-**Theoretical Advantage for Predictive Maintenance:**
-- Can attend to critical events hours before current time
-- Interpretable: attention weights show which timesteps drove prediction
-- Reduces information bottleneck of final hidden state
+#### **5.5.2 Attention Backward Pass**
+
+The attention mechanism adds several gradient paths:
+
+```python
+def backward_batch(self, y_pred, y_true, caches):
+    # Output layer gradient
+    dy = (y_pred - y_true)
+    d_context = Wy.T @ dy  # Gradient to context vector
+
+    # ═══════════════════════════════════════════════════════════
+    # ATTENTION GRADIENTS
+    # ═══════════════════════════════════════════════════════════
+
+    # Gradient to alpha: context = Σ α_t * h_t
+    # d_alpha[t] = d_context · h_t (dot product over hidden dim)
+    d_alpha = cp.sum(d_context * H, axis=1)  # (seq_len, batch_size)
+
+    # Gradient to H from attention: d_H[t] = α_t * d_context
+    d_H_att = alpha[:, None, :] * d_context  # (seq_len, hidden_size, batch_size)
+
+    # ═══════════════════════════════════════════════════════════
+    # SOFTMAX GRADIENT
+    # α = softmax(e)
+    # Jacobian: dα_i/de_j = α_i(δ_ij - α_j)
+    # Simplified: d_e = α * (d_alpha - Σ α * d_alpha)
+    # ═══════════════════════════════════════════════════════════
+    sum_alpha_dalpha = cp.sum(alpha * d_alpha, axis=0)
+    d_e = alpha * (d_alpha - sum_alpha_dalpha)
+
+    # ═══════════════════════════════════════════════════════════
+    # ATTENTION PARAMETER GRADIENTS
+    # e_t = v_att^T @ tanh(W_att @ h_t)
+    # ═══════════════════════════════════════════════════════════
+
+    # Gradient for v_att: dv_att = Σ S_t * d_e_t
+    d_v_att = cp.sum(S * d_e[:, None, :], axis=(0, 2))
+    grads['v_att'] = d_v_att.reshape(-1, 1) / batch_size
+
+    # Gradient through tanh: d_S = d_e * v_att
+    d_S = v_att * d_e[:, None, :]
+
+    # Gradient for W_att: d_pre_S = d_S * (1 - S²)
+    d_pre_S = d_S * (1 - S**2)
+    for t in range(seq_len):
+        d_W_att += d_pre_S[t] @ H[t].T
+    grads['W_att'] = d_W_att / batch_size
+
+    # Gradient to H from W_att transformation
+    d_H_Watt = W_att.T @ d_pre_S
+
+    # Total gradient to hidden states
+    d_H_total = d_H_att + d_H_Watt
+
+    # ═══════════════════════════════════════════════════════════
+    # BPTT with attention gradients
+    # Each h_t now receives gradient from attention mechanism
+    # ═══════════════════════════════════════════════════════════
+    for t in reversed(range(seq_len)):
+        dh = dh_next + d_H_total[t]  # Add attention gradient!
+        # ... standard BPTT continues
+```
+
+**Additional Parameters:**
+- W_att: (hidden_size, hidden_size) - transforms hidden states for scoring
+- v_att: (hidden_size, 1) - projects to scalar attention score
 
 ---
 
-### 5.3 Architecture Comparison
+### 5.6 Architecture Comparison Summary
 
-| Architecture | Parameters | F1-Score | Training Time | Best Use Case |
-|--------------|------------|----------|---------------|---------------|
-| **Nested** | ~98K | **82.94%** | 1235s | Long sequences, hierarchical patterns |
-| CIFG | ~74K | 82.67% | 516s | Resource-constrained, fast training |
-| Peephole | ~98K | 82.52% | 1054s | Timing-sensitive predictions |
-| Optimized | ~82K | 82.51% | 762s | Baseline, balanced performance |
-| Attention | ~99K | 82.28% | 2514s | Interpretability, variable-length sequences |
-| Bidirectional | ~164K | 81.53% | 5308s | Offline analysis with future context |
-| GLU | ~99K | 80.44% | 1896s | Noisy data, gradient stability |
+| Architecture | Forward Pass Modification | Backward Pass Modification | Parameter Change |
+|--------------|---------------------------|----------------------------|------------------|
+| **Baseline** | Standard 4-gate LSTM | Standard BPTT | Baseline (~76K) |
+| **Nested** | Inner gates for hierarchical cell update | Dual gradient paths through inner/outer gates | +~16K (+21%) |
+| **CIFG** | i = 1 - f (coupled gates) | df_combined = df - di | -~19K (-25%) |
+| **Peephole** | Gates observe cell state via V vectors | Additional V gradients + dc through output peephole | +384 (+0.5%) |
+| **BiDir** | Forward + backward processing | Separate BPTT for each direction | +~76K (2x) |
+| **GLU** | c_bar = A ⊙ σ(B) instead of tanh | GLU gradient: dA and dB paths | +~19K (+25%) |
+| **Attention** | Context = weighted sum of all h_t | Gradient to all h_t through attention | +~17K (+22%) |
 
 ---
 
