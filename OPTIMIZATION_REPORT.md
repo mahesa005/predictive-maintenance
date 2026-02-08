@@ -25,13 +25,13 @@
 
 1. **Nested LSTM outperforms all other architectures** - The hierarchical cell state mechanism with dual memory paths provides superior gradient flow for 24-hour lookback windows.
 
-2. **Feature engineering contributes ~18% F1 improvement** - Moving from baseline (f2) to ultimate (f19) features improved F1 from ~65% to ~83%.
+2. **Feature engineering contributes marginal improvement (~1% F1)** - With optimal configuration (win48, 30min, SMOTE, Attention), even baseline f2 achieves 81.97%. Moving to f19 improves to 82.94% (+0.97%).
 
 3. **30-minute sampling with 48-timestep window is optimal** - This configuration captures exactly 24 hours of operational context, aligning with daily IT operations cycles.
 
 4. **SMOTE is essential for class balance** - Synthetic oversampling consistently outperformed class weighting and undersampling approaches.
 
-5. **Attention mechanism provides marginal benefit on basic features but diminishing returns on rich features** - Attention is most effective when feature engineering is limited.
+5. **Optimal configuration enables high baseline performance** - With win48, 30min, SMOTE, even f2 baseline achieves 81.97% F1 (Attention) - additional features provide only ~1% improvement.
 
 ---
 
@@ -141,7 +141,7 @@ FEATURE_COLS = ['Priority', 'Impact']
 | Priority | Ordinal | 1-4 | Urgency level from ticketing system |
 | Impact | Ordinal | 1-4 | Business impact level |
 
-**Performance:** F1 ~65% (baseline)
+**Performance:** F1 81.97% with Attention+SMOTE (win48, 30min)
 
 ---
 
@@ -172,7 +172,7 @@ FEATURE_COLS = [
 | risk_score | 0.6P + 0.4I | Domain-weighted priority emphasis |
 | priority_squared | P² | Amplifies high-priority signals |
 
-**Performance:** F1 ~75% (+10% from baseline)
+**Performance:** F1 82.05% with Attention+SMOTE (+0.08% from f2)
 
 ---
 
@@ -196,7 +196,7 @@ FEATURE_COLS = f7 + [
 
 **Hypothesis:** Incidents follow diurnal patterns; high Priority at night may indicate different severity than during business hours.
 
-**Performance:** F1 ~80% (+5% from f7)
+**Performance:** F1 82.39% with Attention+SMOTE (+0.34% from f7)
 
 ---
 
@@ -588,37 +588,39 @@ For incident prediction, this matches the operational reality:
 
 #### Attention Impact Analysis
 
-| Scenario | Attention Benefit | Explanation |
-|----------|-------------------|-------------|
-| Sparse features (f2) | +5-10% F1 | Attention learns implicit patterns |
-| Rich features (f19) | +0.3% F1 | Explicit features reduce attention's value |
-| Long windows (60+) | +1-2% F1 | Attention helps focus on relevant timesteps |
+| Scenario | With Attention | Without Attention | Attention Benefit | Explanation |
+|----------|----------------|-------------------|-------------------|-------------|
+| Sparse features (f2) | 81.97% | ~75-78%* | +4-7% F1 | Attention compensates for missing features |
+| Rich features (f19) | 82.28% | 82.94% (Nested) | -0.66% | Nested outperforms Attention with rich features |
 
-**Conclusion:** Attention is most valuable when feature engineering is limited or windows are very long. With f19-ultimate features, the explicit temporal statistics (volatility, acceleration) already capture what attention would learn.
+*Estimated without SMOTE+Attention optimization
+
+**Conclusion:** Attention is most valuable when feature engineering is limited. With f19-ultimate features, Nested LSTM outperforms Attention because explicit temporal statistics (volatility, acceleration) already capture what attention would learn.
 
 ### 8.2 Feature Engineering Impact
 
-#### Cumulative Feature Contribution
+#### Cumulative Feature Contribution (with Attention+SMOTE, win48, 30min)
 
-| Feature Group | Added Features | Cumulative F1 | Δ F1 |
-|---------------|----------------|---------------|------|
-| Base | Priority, Impact | 65.0% | - |
-| Interactions | P×I, P², I² | 75.0% | +10.0% |
-| Temporal | hour_sin, hour_cos | 80.0% | +5.0% |
-| Service | risk_score, frequency | 82.5% | +2.5% |
-| Sequence | volatility, acceleration | 82.9% | +0.4% |
+| Feature Group | Package | Features | F1 | Δ F1 |
+|---------------|---------|----------|-----|------|
+| Base | f2 | Priority, Impact | 81.97% | - |
+| Interactions | f7 | +P×I, P², I² | 82.05% | +0.08% |
+| Temporal | f11 | +hour_sin, hour_cos | 82.39% | +0.34% |
+| Service | f13 | +risk_score, frequency | 82.53% | +0.14% |
+| Full | f15 | +temporal features | 82.31% | -0.22% |
+| Sequence | f19 | +volatility, acceleration | 82.94%* | +0.41% |
 
-#### Feature Importance Hypothesis
+*Note: f19 best result (82.94%) uses Nested LSTM, not Attention.
 
-Based on architecture and domain knowledge:
+#### Key Insight: Configuration > Features
 
-| Rank | Feature Group | Estimated Contribution | Mechanism |
-|------|---------------|------------------------|-----------|
-| 1 | Sequence (volatility, acceleration) | ~30% | Explicit temporal patterns |
-| 2 | Interactions (P×I, P²) | ~25% | Non-linear boundaries |
-| 3 | Service (risk_score) | ~20% | Prior probability injection |
-| 4 | Base (P, I) | ~15% | Raw signal |
-| 5 | Temporal (hour_sin) | ~10% | Diurnal patterns |
+The most significant finding is that **optimal configuration** (win48, 30min, SMOTE) enables even the simplest f2 model to achieve 81.97% F1. This suggests:
+
+1. **Window size (48 = 24h lookback)** provides critical temporal context
+2. **SMOTE** handles class imbalance effectively
+3. **Attention mechanism** learns implicit patterns from raw Priority/Impact signals
+
+Additional features from f7 to f19 provide only marginal gains (+0.97% total), indicating that the base Priority and Impact signals already contain most of the predictive information when properly windowed and balanced.
 
 ### 8.3 Window Size Analysis
 
@@ -657,10 +659,10 @@ Based on architecture and domain knowledge:
 
 ### 9.2 Key Learnings
 
-1. **Feature Engineering > Architecture Complexity**
-   - Moving from f2 to f19 provided ~18% F1 improvement
-   - Changing architectures provided ~2-3% improvement
-   - Invest in feature engineering first, then optimize architecture
+1. **Optimal Configuration is Critical**
+   - With optimal config (win48, 30min, SMOTE), even f2 baseline achieves 81.97%
+   - Moving from f2 to f19 provides only ~1% additional F1 improvement
+   - The combination of window size, sampling, and SMOTE matters more than feature count
 
 2. **Window Size Matters**
    - Too short (12): Misses daily patterns
