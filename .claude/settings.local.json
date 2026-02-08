@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python scripts/run_eda_analysis.py:*)"
+      "Bash(python scripts/run_eda_analysis.py:*)",
+      "Bash( for f in data/output/*/metrics_*.csv data/output_kfold/*/metrics_*.csv)",
+      "Bash(do if [ -f \"$f\" ])",
+      "Bash(then tail -1 \"$f\" fi done)",
+      "Read(//c/Users/Mahesa/OneDrive/ITB/Coding/Work/Infomedia/predictive-maintenance/**)",
+      "Bash(sort:*)"
     ]
   }
 }
