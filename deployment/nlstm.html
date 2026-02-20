@@ -1,0 +1,1238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Nested LSTM Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Fraunces:ital,wght@0,300;0,700;1,300&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #07080d;
+    --surface: #0d1117;
+    --surface2: #131923;
+    --border: #1e2733;
+    --outer-color: #3b82f6;
+    --outer-glow: rgba(59,130,246,0.3);
+    --inner-color: #f59e0b;
+    --inner-glow: rgba(245,158,11,0.3);
+    --cell-color: #10b981;
+    --cell-glow: rgba(16,185,129,0.25);
+    --output-color: #ec4899;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --accent: #7c3aed;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', monospace;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Grid background */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: 
+      linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .page { position: relative; z-index: 1; }
+
+  /* HEADER */
+  header {
+    padding: 3rem 4rem 2rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .tag {
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--outer-color);
+    margin-bottom: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .tag::before { content: ''; width: 20px; height: 1px; background: var(--outer-color); }
+
+  h1 {
+    font-family: 'Fraunces', serif;
+    font-size: clamp(2rem, 4vw, 3.5rem);
+    font-weight: 700;
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #e2e8f0 0%, #94a3b8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  h1 em {
+    font-style: italic;
+    background: linear-gradient(135deg, var(--outer-color), var(--inner-color));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .subtitle {
+    margin-top: 0.75rem;
+    font-size: 0.8rem;
+    color: var(--muted);
+    max-width: 60ch;
+    line-height: 1.7;
+    font-weight: 300;
+  }
+
+  /* NAV TABS */
+  .tabs {
+    display: flex;
+    gap: 0;
+    padding: 0 4rem;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+
+  .tab {
+    padding: 1rem 1.5rem;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    white-space: nowrap;
+    transition: all 0.2s;
+    background: none;
+    border-top: none;
+    border-left: none;
+    border-right: none;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    color: var(--outer-color);
+    border-bottom-color: var(--outer-color);
+  }
+
+  /* SECTIONS */
+  .section { display: none; padding: 3rem 4rem; }
+  .section.active { display: block; }
+
+  /* ARCHITECTURE DIAGRAM */
+  .arch-container {
+    width: 100%;
+    overflow-x: auto;
+    padding: 2rem 0;
+  }
+
+  svg text { font-family: 'JetBrains Mono', monospace; }
+
+  .arch-svg {
+    min-width: 900px;
+    width: 100%;
+  }
+
+  /* LEGEND */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    margin-top: 2rem;
+    padding: 1.5rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+  }
+
+  .legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* COMPONENT GRID */
+  .component-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+    gap: 1.5px;
+    margin-top: 1.5px;
+    background: var(--border);
+    border: 1px solid var(--border);
+  }
+
+  .component-card {
+    background: var(--surface);
+    padding: 2rem;
+    position: relative;
+    overflow: hidden;
+    cursor: pointer;
+    transition: background 0.2s;
+  }
+
+  .component-card:hover { background: var(--surface2); }
+
+  .component-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0;
+    width: 3px; height: 100%;
+  }
+
+  .component-card.outer::before { background: var(--outer-color); }
+  .component-card.inner::before { background: var(--inner-color); }
+  .component-card.cell::before { background: var(--cell-color); }
+  .component-card.output-c::before { background: var(--output-color); }
+
+  .comp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1.25rem;
+  }
+
+  .comp-name {
+    font-size: 0.7rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .comp-symbol {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 1.8rem;
+    font-weight: 300;
+    line-height: 1;
+  }
+
+  .comp-symbol.outer { color: var(--outer-color); text-shadow: 0 0 20px var(--outer-glow); }
+  .comp-symbol.inner { color: var(--inner-color); text-shadow: 0 0 20px var(--inner-glow); }
+  .comp-symbol.cell { color: var(--cell-color); text-shadow: 0 0 20px var(--cell-glow); }
+  .comp-symbol.output-c { color: var(--output-color); }
+
+  .comp-eq {
+    font-size: 0.78rem;
+    color: var(--text);
+    line-height: 1.6;
+    margin-bottom: 1rem;
+    padding: 0.75rem;
+    background: rgba(255,255,255,0.02);
+    border-radius: 2px;
+    letter-spacing: 0;
+  }
+
+  .comp-desc {
+    font-size: 0.72rem;
+    color: var(--muted);
+    line-height: 1.8;
+    font-weight: 300;
+  }
+
+  .comp-role {
+    margin-top: 0.75rem;
+    font-size: 0.65rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 0.25rem 0.5rem;
+    display: inline-block;
+    border-radius: 2px;
+  }
+
+  .comp-role.outer { background: rgba(59,130,246,0.1); color: var(--outer-color); }
+  .comp-role.inner { background: rgba(245,158,11,0.1); color: var(--inner-color); }
+  .comp-role.cell { background: rgba(16,185,129,0.1); color: var(--cell-color); }
+  .comp-role.output-c { background: rgba(236,72,153,0.1); color: var(--output-color); }
+
+  /* WORKFLOW */
+  .workflow-steps {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    margin-top: 2rem;
+  }
+
+  .step {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 0;
+    position: relative;
+  }
+
+  .step-num {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 1.75rem;
+  }
+
+  .step-circle {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.72rem;
+    font-weight: 600;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+  }
+
+  .step-line {
+    width: 1px;
+    flex: 1;
+    min-height: 20px;
+    margin: 4px 0;
+  }
+
+  .step-content {
+    padding: 1.5rem 2rem 1.5rem 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .step:last-child .step-content { border-bottom: none; }
+  .step:last-child .step-line { display: none; }
+
+  .step-phase {
+    font-size: 0.6rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  .step-title {
+    font-family: 'Fraunces', serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    margin-bottom: 0.75rem;
+    line-height: 1.2;
+  }
+
+  .step-body {
+    font-size: 0.75rem;
+    line-height: 1.9;
+    color: var(--muted);
+    max-width: 72ch;
+  }
+
+  .step-body strong { color: var(--text); font-weight: 600; }
+
+  .step-math {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    border-left: 2px solid var(--border);
+    font-size: 0.72rem;
+    line-height: 2;
+    color: var(--text);
+  }
+
+  .forward .step-circle { background: rgba(59,130,246,0.15); border: 1px solid var(--outer-color); color: var(--outer-color); }
+  .forward .step-line { background: linear-gradient(var(--outer-color), var(--border)); }
+  .forward .step-phase { color: var(--outer-color); }
+
+  .backward .step-circle { background: rgba(245,158,11,0.15); border: 1px solid var(--inner-color); color: var(--inner-color); }
+  .backward .step-line { background: linear-gradient(var(--inner-color), var(--border)); }
+  .backward .step-phase { color: var(--inner-color); }
+
+  .infer .step-circle { background: rgba(16,185,129,0.15); border: 1px solid var(--cell-color); color: var(--cell-color); }
+  .infer .step-line { background: linear-gradient(var(--cell-color), var(--border)); }
+  .infer .step-phase { color: var(--cell-color); }
+
+  /* MATH SECTION */
+  .math-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 2rem;
+    margin: 1.5rem 0;
+    position: relative;
+  }
+
+  .math-block h3 {
+    font-size: 0.7rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 1.25rem;
+  }
+
+  .math-line {
+    display: grid;
+    grid-template-columns: 200px 1fr;
+    gap: 1rem;
+    align-items: baseline;
+    padding: 0.4rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 0.78rem;
+  }
+
+  .math-line:last-child { border-bottom: none; }
+
+  .math-label { color: var(--muted); font-size: 0.68rem; }
+  .math-eq { color: var(--text); letter-spacing: 0; }
+
+  .highlight-outer { color: var(--outer-color); }
+  .highlight-inner { color: var(--inner-color); }
+  .highlight-cell { color: var(--cell-color); }
+  .highlight-out { color: var(--output-color); }
+
+  /* COMPARISON TABLE */
+  .compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+    margin-top: 2rem;
+  }
+
+  .compare-table th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    background: var(--surface);
+    font-size: 0.65rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .compare-table td {
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+    line-height: 1.7;
+    color: var(--muted);
+  }
+
+  .compare-table td:first-child { color: var(--text); font-weight: 600; }
+  .compare-table tr:hover td { background: var(--surface); }
+
+  /* Animations */
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .section.active { animation: fadeIn 0.3s ease; }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .pulse { animation: pulse 2s ease infinite; }
+
+  /* Flow arrows in SVG */
+  .flow-path { stroke-dasharray: 6 3; animation: flowAnim 1.5s linear infinite; }
+  @keyframes flowAnim { to { stroke-dashoffset: -18; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+<header>
+  <div class="tag">Architecture Reference</div>
+  <h1>Nested <em>LSTM</em><br>Cell-in-Cell Architecture</h1>
+  <p class="subtitle">A hierarchical memory architecture where the cell state itself undergoes a secondary LSTM-style gating operation — enabling richer temporal abstraction than standard LSTMs.</p>
+</header>
+
+<div class="tabs">
+  <button class="tab active" onclick="showTab('diagram')">Diagram</button>
+  <button class="tab" onclick="showTab('components')">Components</button>
+  <button class="tab" onclick="showTab('workflow')">Workflow</button>
+  <button class="tab" onclick="showTab('math')">Mathematics</button>
+  <button class="tab" onclick="showTab('compare')">vs. Standard LSTM</button>
+</div>
+
+<!-- ═══════════════════ DIAGRAM ═══════════════════ -->
+<div class="section active" id="tab-diagram">
+  <div class="arch-container">
+    <svg class="arch-svg" viewBox="0 0 960 620" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#475569"/>
+        </marker>
+        <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6"/>
+        </marker>
+        <marker id="arrow-amber" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#f59e0b"/>
+        </marker>
+        <marker id="arrow-green" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#10b981"/>
+        </marker>
+        <marker id="arrow-pink" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+          <path d="M0,0 L0,6 L8,3 z" fill="#ec4899"/>
+        </marker>
+        <filter id="glow-blue">
+          <feGaussianBlur stdDeviation="3" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="glow-amber">
+          <feGaussianBlur stdDeviation="3" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+        <filter id="glow-green">
+          <feGaussianBlur stdDeviation="3" result="blur"/>
+          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
+
+      <!-- Background panel -->
+      <rect x="10" y="10" width="940" height="600" rx="4" fill="#0d1117" stroke="#1e2733" stroke-width="1"/>
+
+      <!-- Title -->
+      <text x="30" y="42" fill="#64748b" font-size="9" letter-spacing="2">NESTED LSTM — SINGLE TIMESTEP t</text>
+
+      <!-- ── INPUT SECTION ── -->
+      <!-- x_t input -->
+      <rect x="30" y="70" width="90" height="36" rx="2" fill="#131923" stroke="#1e2733"/>
+      <text x="75" y="85" fill="#94a3b8" font-size="9" text-anchor="middle">INPUT</text>
+      <text x="75" y="98" fill="#e2e8f0" font-size="11" text-anchor="middle" font-weight="600">x_t</text>
+
+      <!-- h_prev input -->
+      <rect x="30" y="120" width="90" height="36" rx="2" fill="#131923" stroke="#1e2733"/>
+      <text x="75" y="135" fill="#94a3b8" font-size="9" text-anchor="middle">PREV HIDDEN</text>
+      <text x="75" y="148" fill="#e2e8f0" font-size="11" text-anchor="middle" font-weight="600">h_{t-1}</text>
+
+      <!-- c_prev input -->
+      <rect x="30" y="170" width="90" height="36" rx="2" fill="#131923" stroke="#1e2733"/>
+      <text x="75" y="185" fill="#94a3b8" font-size="9" text-anchor="middle">PREV CELL</text>
+      <text x="75" y="198" fill="#e2e8f0" font-size="11" text-anchor="middle" font-weight="600">c_{t-1}</text>
+
+      <!-- Stack [h,x] = z -->
+      <rect x="155" y="108" width="70" height="60" rx="2" fill="#131923" stroke="#475569" stroke-dasharray="3,2"/>
+      <text x="190" y="130" fill="#64748b" font-size="8" text-anchor="middle">CONCAT</text>
+      <text x="190" y="150" fill="#94a3b8" font-size="12" text-anchor="middle" font-weight="600">z</text>
+      <text x="190" y="162" fill="#475569" font-size="7" text-anchor="middle">[h; x]</text>
+
+      <!-- Arrows to z -->
+      <line x1="120" y1="88" x2="155" y2="130" stroke="#475569" stroke-width="1" marker-end="url(#arrow)"/>
+      <line x1="120" y1="138" x2="155" y2="138" stroke="#475569" stroke-width="1" marker-end="url(#arrow)"/>
+
+      <!-- ═══════════════════════════════════════════ -->
+      <!--          OUTER GATES (BLUE)                -->
+      <!-- ═══════════════════════════════════════════ -->
+      <text x="280" y="65" fill="#3b82f6" font-size="9" letter-spacing="1.5">OUTER GATES — STANDARD LSTM</text>
+
+      <!-- f gate -->
+      <rect x="270" y="72" width="100" height="50" rx="3" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="1.5" filter="url(#glow-blue)"/>
+      <text x="320" y="90" fill="#3b82f6" font-size="9" text-anchor="middle" letter-spacing="1">FORGET</text>
+      <text x="320" y="107" fill="#3b82f6" font-size="14" text-anchor="middle" font-style="italic">f_t</text>
+      <text x="320" y="118" fill="#475569" font-size="7" text-anchor="middle">σ(Wf·z + bf)</text>
+
+      <!-- i gate -->
+      <rect x="270" y="138" width="100" height="50" rx="3" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="1.5" filter="url(#glow-blue)"/>
+      <text x="320" y="156" fill="#3b82f6" font-size="9" text-anchor="middle" letter-spacing="1">INPUT</text>
+      <text x="320" y="173" fill="#3b82f6" font-size="14" text-anchor="middle" font-style="italic">i_t</text>
+      <text x="320" y="184" fill="#475569" font-size="7" text-anchor="middle">σ(Wi·z + bi)</text>
+
+      <!-- c_bar gate -->
+      <rect x="270" y="204" width="100" height="50" rx="3" fill="rgba(59,130,246,0.05)" stroke="#3b82f6" stroke-width="1" stroke-dasharray="4,2"/>
+      <text x="320" y="222" fill="#3b82f6" font-size="9" text-anchor="middle" letter-spacing="1">CANDIDATE</text>
+      <text x="320" y="239" fill="#3b82f6" font-size="14" text-anchor="middle" font-style="italic">c̃_t</text>
+      <text x="320" y="250" fill="#475569" font-size="7" text-anchor="middle">tanh(Wc·z + bc)</text>
+
+      <!-- o gate -->
+      <rect x="270" y="270" width="100" height="50" rx="3" fill="rgba(59,130,246,0.08)" stroke="#3b82f6" stroke-width="1.5" filter="url(#glow-blue)"/>
+      <text x="320" y="288" fill="#3b82f6" font-size="9" text-anchor="middle" letter-spacing="1">OUTPUT</text>
+      <text x="320" y="305" fill="#3b82f6" font-size="14" text-anchor="middle" font-style="italic">o_t</text>
+      <text x="320" y="316" fill="#475569" font-size="7" text-anchor="middle">σ(Wo·z + bo)</text>
+
+      <!-- Arrows: z → outer gates -->
+      <line x1="225" y1="130" x2="270" y2="97" stroke="#3b82f6" stroke-width="1" marker-end="url(#arrow-blue)" opacity="0.6"/>
+      <line x1="225" y1="138" x2="270" y2="163" stroke="#3b82f6" stroke-width="1" marker-end="url(#arrow-blue)" opacity="0.6"/>
+      <line x1="225" y1="145" x2="270" y2="229" stroke="#3b82f6" stroke-width="1" marker-end="url(#arrow-blue)" opacity="0.6"/>
+      <line x1="225" y1="152" x2="270" y2="295" stroke="#3b82f6" stroke-width="1" marker-end="url(#arrow-blue)" opacity="0.6"/>
+
+      <!-- ═══════════════════════════════════════════ -->
+      <!--          INNER GATES (AMBER)               -->
+      <!-- ═══════════════════════════════════════════ -->
+      <text x="280" y="355" fill="#f59e0b" font-size="9" letter-spacing="1.5">INNER GATES — NESTED LSTM EXTENSION</text>
+
+      <!-- f_inner gate -->
+      <rect x="270" y="362" width="100" height="50" rx="3" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="1.5" filter="url(#glow-amber)"/>
+      <text x="320" y="380" fill="#f59e0b" font-size="9" text-anchor="middle" letter-spacing="1">INNER FORGET</text>
+      <text x="320" y="397" fill="#f59e0b" font-size="13" text-anchor="middle" font-style="italic">f_inner</text>
+      <text x="320" y="408" fill="#475569" font-size="7" text-anchor="middle">σ(Wfi·z + bfi)</text>
+
+      <!-- i_inner gate -->
+      <rect x="270" y="428" width="100" height="50" rx="3" fill="rgba(245,158,11,0.1)" stroke="#f59e0b" stroke-width="1.5" filter="url(#glow-amber)"/>
+      <text x="320" y="446" fill="#f59e0b" font-size="9" text-anchor="middle" letter-spacing="1">INNER INPUT</text>
+      <text x="320" y="463" fill="#f59e0b" font-size="13" text-anchor="middle" font-style="italic">i_inner</text>
+      <text x="320" y="474" fill="#475569" font-size="7" text-anchor="middle">σ(Wii·z + bii)</text>
+
+      <!-- Arrows: z → inner gates -->
+      <line x1="225" y1="155" x2="270" y2="387" stroke="#f59e0b" stroke-width="1" marker-end="url(#arrow-amber)" opacity="0.5"/>
+      <line x1="225" y1="160" x2="270" y2="453" stroke="#f59e0b" stroke-width="1" marker-end="url(#arrow-amber)" opacity="0.5"/>
+
+      <!-- ═══════════════════════════════════════════ -->
+      <!--          CELL UPDATE OPERATIONS            -->
+      <!-- ═══════════════════════════════════════════ -->
+      <text x="440" y="65" fill="#64748b" font-size="9" letter-spacing="1.5">CELL STATE HIERARCHY</text>
+
+      <!-- Step 1: c_temp = f * c_prev + i * c_bar -->
+      <rect x="430" y="130" width="160" height="70" rx="3" fill="rgba(16,185,129,0.06)" stroke="#10b981" stroke-width="1" stroke-dasharray="4,2"/>
+      <text x="510" y="148" fill="#10b981" font-size="9" text-anchor="middle" letter-spacing="1">TEMP CELL STATE</text>
+      <text x="510" y="168" fill="#10b981" font-size="12" text-anchor="middle" font-style="italic">c_temp</text>
+      <text x="510" y="185" fill="#475569" font-size="7.5" text-anchor="middle">f_t ⊙ c_{t-1} + i_t ⊙ c̃_t</text>
+
+      <!-- Step 2: c_new = f_inner * c_prev + i_inner * tanh(c_temp) -->
+      <rect x="430" y="250" width="160" height="80" rx="3" fill="rgba(16,185,129,0.12)" stroke="#10b981" stroke-width="2" filter="url(#glow-green)"/>
+      <text x="510" y="270" fill="#10b981" font-size="9" text-anchor="middle" letter-spacing="1">NESTED CELL STATE</text>
+      <text x="510" y="293" fill="#10b981" font-size="15" text-anchor="middle" font-style="italic">c_t</text>
+      <text x="510" y="310" fill="#64748b" font-size="7" text-anchor="middle">f_inner ⊙ c_{t-1} + i_inner ⊙ tanh(c_temp)</text>
+
+      <!-- Arrows to c_temp -->
+      <line x1="370" y1="97" x2="430" y2="155" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)" opacity="0.7"/>
+      <line x1="370" y1="163" x2="430" y2="163" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)" opacity="0.7"/>
+      <line x1="370" y1="229" x2="430" y2="178" stroke="#3b82f6" stroke-width="1.5" marker-end="url(#arrow-blue)" opacity="0.7"/>
+      <!-- c_prev → c_temp -->
+      <line x1="120" y1="188" x2="430" y2="188" stroke="#475569" stroke-width="1" marker-end="url(#arrow)" stroke-dasharray="4,2"/>
+
+      <!-- c_temp → c_new -->
+      <line x1="510" y1="200" x2="510" y2="250" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+
+      <!-- f_inner → c_new -->
+      <line x1="370" y1="387" x2="430" y2="295" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)" opacity="0.7"/>
+      <!-- i_inner → c_new -->
+      <line x1="370" y1="453" x2="430" y2="310" stroke="#f59e0b" stroke-width="1.5" marker-end="url(#arrow-amber)" opacity="0.7"/>
+      <!-- c_prev → c_new (inner forget path) -->
+      <path d="M 120 200 Q 120 520 430 290" stroke="#475569" stroke-width="1" fill="none" marker-end="url(#arrow)" stroke-dasharray="4,2"/>
+
+      <!-- ═══════════════════════════════════════════ -->
+      <!--          OUTPUT SECTION                    -->
+      <!-- ═══════════════════════════════════════════ -->
+
+      <!-- tanh(c_t) -->
+      <rect x="650" y="250" width="80" height="80" rx="3" fill="rgba(236,72,153,0.06)" stroke="#ec4899" stroke-width="1"/>
+      <text x="690" y="280" fill="#ec4899" font-size="8" text-anchor="middle">tanh</text>
+      <text x="690" y="300" fill="#ec4899" font-size="11" text-anchor="middle" font-style="italic">tanh(c_t)</text>
+      <text x="690" y="315" fill="#475569" font-size="7" text-anchor="middle">activation</text>
+
+      <!-- h_t output -->
+      <rect x="790" y="265" width="100" height="50" rx="3" fill="rgba(236,72,153,0.12)" stroke="#ec4899" stroke-width="2"/>
+      <text x="840" y="283" fill="#ec4899" font-size="9" text-anchor="middle" letter-spacing="1">HIDDEN STATE</text>
+      <text x="840" y="300" fill="#ec4899" font-size="15" text-anchor="middle" font-style="italic">h_t</text>
+      <text x="840" y="312" fill="#475569" font-size="7" text-anchor="middle">o_t ⊙ tanh(c_t)</text>
+
+      <!-- c_t → tanh -->
+      <line x1="590" y1="290" x2="650" y2="290" stroke="#10b981" stroke-width="1.5" marker-end="url(#arrow-green)"/>
+      <!-- tanh → h_t (multiply) -->
+      <line x1="730" y1="290" x2="790" y2="290" stroke="#ec4899" stroke-width="1.5" marker-end="url(#arrow-pink)"/>
+      <!-- o_t → h_t -->
+      <path d="M 370 295 Q 580 370 790 300" stroke="#3b82f6" stroke-width="1.5" fill="none" marker-end="url(#arrow-pink)" opacity="0.7"/>
+
+      <!-- Final output -->
+      <rect x="790" y="360" width="100" height="50" rx="3" fill="#0d1117" stroke="#7c3aed" stroke-width="1.5"/>
+      <text x="840" y="378" fill="#7c3aed" font-size="9" text-anchor="middle" letter-spacing="1">OUTPUT</text>
+      <text x="840" y="395" fill="#a78bfa" font-size="14" text-anchor="middle" font-style="italic">ŷ_t</text>
+      <text x="840" y="407" fill="#475569" font-size="7" text-anchor="middle">σ(Wy·h_t + by)</text>
+
+      <!-- h_t → ŷ -->
+      <line x1="840" y1="315" x2="840" y2="360" stroke="#7c3aed" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+      <!-- Recurrent arrows -->
+      <!-- h_t → h_{t+1} label -->
+      <path d="M 840 265 Q 840 240 920 240 Q 940 240 940 200 Q 940 70 75 70 Q 30 70 30 120" stroke="#64748b" stroke-width="1" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow)"/>
+      <text x="900" y="235" fill="#475569" font-size="7" text-anchor="middle">h_t → h_{t+1}</text>
+      
+      <!-- c_t → c_{t+1} label -->
+      <text x="510" y="560" fill="#475569" font-size="7" text-anchor="middle">c_t → c_{t+1} (next timestep)</text>
+      <path d="M 510 330 L 510 545 Q 510 555 90 555 Q 75 555 75 206" stroke="#10b981" stroke-width="1" fill="none" stroke-dasharray="5,3" marker-end="url(#arrow-green)" opacity="0.4"/>
+
+      <!-- ⊙ operators -->
+      <circle cx="490" cy="165" r="8" fill="#131923" stroke="#475569" stroke-width="1"/>
+      <text x="490" y="169" fill="#94a3b8" font-size="9" text-anchor="middle">⊙</text>
+      <circle cx="530" cy="165" r="8" fill="#131923" stroke="#475569" stroke-width="1"/>
+      <text x="530" y="169" fill="#94a3b8" font-size="9" text-anchor="middle">+</text>
+
+      <circle cx="490" cy="290" r="8" fill="#131923" stroke="#475569" stroke-width="1"/>
+      <text x="490" y="294" fill="#94a3b8" font-size="9" text-anchor="middle">⊙</text>
+      <circle cx="530" cy="290" r="8" fill="#131923" stroke="#475569" stroke-width="1"/>
+      <text x="530" y="294" fill="#94a3b8" font-size="9" text-anchor="middle">+</text>
+
+      <circle cx="758" cy="290" r="8" fill="#131923" stroke="#475569" stroke-width="1"/>
+      <text x="758" y="294" fill="#94a3b8" font-size="9" text-anchor="middle">⊙</text>
+
+    </svg>
+  </div>
+
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div> Outer gates (standard LSTM)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f59e0b"></div> Inner gates (nested extension)</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div> Cell state hierarchy</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ec4899"></div> Hidden / output state</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#7c3aed"></div> Final prediction</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#475569; border-radius:0"></div> ⊙ Element-wise multiply</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ COMPONENTS ═══════════════════ -->
+<div class="section" id="tab-components">
+
+  <div class="component-grid">
+
+    <!-- z: concatenation -->
+    <div class="component-card outer">
+      <div class="comp-header">
+        <div>
+          <div class="comp-name">Concatenation</div>
+        </div>
+        <div class="comp-symbol outer">z</div>
+      </div>
+      <div class="comp-eq">z = [h_{t-1} ; x_t]</div>
+      <div class="comp-desc">The joint input vector formed by vertically stacking the previous hidden state h_{t-1} and the current input x_t. Every gate in both the outer and inner layer reads from this single shared context vector. Its dimension is (hidden_size + input_size). This design lets all gates simultaneously observe both what the model currently knows (h) and what it's currently seeing (x).</div>
+      <span class="comp-role outer">Shared across all gates</span>
+    </div>
+
+    <!-- f_t -->
+    <div class="component-card outer">
+      <div class="comp-header">
+        <div><div class="comp-name">Outer Forget Gate</div></div>
+        <div class="comp-symbol outer">f_t</div>
+      </div>
+      <div class="comp-eq">f_t = σ(W_f · z + b_f)</div>
+      <div class="comp-desc">A sigmoid gate producing values in (0, 1) for each cell dimension. It decides how much of the <strong>temporary</strong> cell state c_temp contributes to c_t during the outer LSTM update. A value near 0 erases that memory dimension in c_temp; near 1 retains it fully. In the nested formulation, f_t gates the carry from c_{t-1} only into the intermediate c_temp, not directly into the final c_t.</div>
+      <span class="comp-role outer">Outer layer · gates c_temp formation</span>
+    </div>
+
+    <!-- i_t -->
+    <div class="component-card outer">
+      <div class="comp-header">
+        <div><div class="comp-name">Outer Input Gate</div></div>
+        <div class="comp-symbol outer">i_t</div>
+      </div>
+      <div class="comp-eq">i_t = σ(W_i · z + b_i)</div>
+      <div class="comp-desc">Controls how much of the candidate memory c̃_t is written into c_temp. Works together with f_t in the outer layer: f_t controls what old memory to preserve in c_temp, while i_t controls what new information to inject into c_temp. Together they govern the intermediate cell state that the inner layer will then refine.</div>
+      <span class="comp-role outer">Outer layer · controls c̃_t write into c_temp</span>
+    </div>
+
+    <!-- c̃_t -->
+    <div class="component-card outer">
+      <div class="comp-header">
+        <div><div class="comp-name">Candidate Cell State</div></div>
+        <div class="comp-symbol outer">c̃_t</div>
+      </div>
+      <div class="comp-eq">c̃_t = tanh(W_c · z + b_c)</div>
+      <div class="comp-desc">The proposed new content to add to memory, bounded to (−1, 1) by tanh. This is the raw "what to write" signal generated by a linear transformation of z. It doesn't enter c_t directly — it must be filtered by i_t first, and the resulting product contributes only to c_temp, which is then further processed by the inner gates.</div>
+      <span class="comp-role outer">Outer layer · proposed new memory content</span>
+    </div>
+
+    <!-- o_t -->
+    <div class="component-card outer">
+      <div class="comp-header">
+        <div><div class="comp-name">Outer Output Gate</div></div>
+        <div class="comp-symbol outer">o_t</div>
+      </div>
+      <div class="comp-eq">o_t = σ(W_o · z + b_o)</div>
+      <div class="comp-desc">The sole output gate in the Nested LSTM. After the inner gates have produced the final c_t, the output gate determines which dimensions of tanh(c_t) are exposed as the hidden state h_t. This is the only mechanism that writes from the cell state into the hidden state, making it the bottleneck for what information is passed to the next timestep's computation and to the output layer.</div>
+      <span class="comp-role outer">Outer layer · exposes c_t → h_t</span>
+    </div>
+
+    <!-- f_inner -->
+    <div class="component-card inner">
+      <div class="comp-header">
+        <div><div class="comp-name">Inner Forget Gate</div></div>
+        <div class="comp-symbol inner">f_in</div>
+      </div>
+      <div class="comp-eq">f_inner = σ(W_fi · z + b_fi)</div>
+      <div class="comp-desc">The key novelty. This gate operates directly on c_{t-1} in the final cell state equation. It learns an independent, slower forgetting policy: while f_t governs forgetting inside c_temp (short-horizon), f_inner governs how much of c_{t-1} bypasses c_temp entirely and flows into c_t (long-horizon). This creates a two-timescale memory: one fast path through c_temp and one slow bypass path.</div>
+      <span class="comp-role inner">Inner layer · long-horizon cell bypass</span>
+    </div>
+
+    <!-- i_inner -->
+    <div class="component-card inner">
+      <div class="comp-header">
+        <div><div class="comp-name">Inner Input Gate</div></div>
+        <div class="comp-symbol inner">i_in</div>
+      </div>
+      <div class="comp-eq">i_inner = σ(W_ii · z + b_ii)</div>
+      <div class="comp-desc">Controls how much of tanh(c_temp) enters the final cell state c_t. While c_temp already encodes a standard LSTM update, this gate acts as a second filter — deciding whether that intermediate computation is relevant enough to affect c_t. Together with f_inner, it gives the inner layer full LSTM-like control over what enters c_t, treating c_temp as the inner "candidate" and c_{t-1} as the inner "past state."</div>
+      <span class="comp-role inner">Inner layer · gates c_temp → c_t</span>
+    </div>
+
+    <!-- c_temp -->
+    <div class="component-card cell">
+      <div class="comp-header">
+        <div><div class="comp-name">Temporary Cell State</div></div>
+        <div class="comp-symbol cell">c_tmp</div>
+      </div>
+      <div class="comp-eq">c_temp = f_t ⊙ c_{t-1} + i_t ⊙ c̃_t</div>
+      <div class="comp-desc">An intermediate computational state that doesn't exist in a standard LSTM. It represents "what a vanilla LSTM would have computed as c_t." In the Nested LSTM, this is not the final cell state — it's an input candidate to the inner layer. The inner forget/input gates then decide how much of c_temp vs. raw c_{t-1} contributes to the actual final c_t. This two-level cell hierarchy is the core innovation.</div>
+      <span class="comp-role cell">Intermediate · standard LSTM cell output</span>
+    </div>
+
+    <!-- c_t -->
+    <div class="component-card cell">
+      <div class="comp-header">
+        <div><div class="comp-name">Final Cell State</div></div>
+        <div class="comp-symbol cell">c_t</div>
+      </div>
+      <div class="comp-eq">c_t = f_inner ⊙ c_{t-1} + i_inner ⊙ tanh(c_temp)</div>
+      <div class="comp-desc">The culmination of the nested computation. This is a second-order cell update: it mixes a filtered version of the previous cell (long-term bypass via f_inner) with a filtered version of the processed intermediate state (i_inner ⊙ tanh(c_temp)). The tanh is applied to c_temp here to squash it into a bounded range before it's weighted by i_inner, preventing unbounded accumulation and making the inner gate's sigmoid meaningful.</div>
+      <span class="comp-role cell">Final · two-level hierarchical memory</span>
+    </div>
+
+    <!-- h_t -->
+    <div class="component-card output-c">
+      <div class="comp-header">
+        <div><div class="comp-name">Hidden State</div></div>
+        <div class="comp-symbol output-c">h_t</div>
+      </div>
+      <div class="comp-eq">h_t = o_t ⊙ tanh(c_t)</div>
+      <div class="comp-desc">The model's externally visible state at timestep t. It's computed identically to a standard LSTM: the outer output gate o_t selectively exposes dimensions of the tanh-compressed cell state. However, since c_t is now a richer, hierarchically-computed state, h_t implicitly encodes two levels of temporal abstraction. This is passed to the output layer and fed back as the h_{t-1} input at the next timestep.</div>
+      <span class="comp-role output-c">Output · externally visible representation</span>
+    </div>
+
+    <!-- ŷ -->
+    <div class="component-card output-c">
+      <div class="comp-header">
+        <div><div class="comp-name">Prediction</div></div>
+        <div class="comp-symbol output-c">ŷ</div>
+      </div>
+      <div class="comp-eq">ŷ = σ(W_y · h_T + b_y)</div>
+      <div class="comp-desc">Applied only after the final timestep T (many-to-one classification). The output layer projects from hidden_size to output_size via a learned weight matrix W_y, then applies sigmoid for binary classification. During training, the BCE loss with class weighting (cw for the positive class) is computed against y_true here. The gradient dy = (ŷ − y_true) is the seed of all backpropagation.</div>
+      <span class="comp-role output-c">Final · binary classification output</span>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════ WORKFLOW ═══════════════════ -->
+<div class="section" id="tab-workflow">
+  <div class="workflow-steps">
+
+    <!-- FORWARD PASS -->
+    <div class="step forward">
+      <div class="step-num">
+        <div class="step-circle">F1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Forward Pass</div>
+        <div class="step-title">Initialization</div>
+        <div class="step-body">
+          Before the sequence begins, hidden state <strong>h₀</strong> and cell state <strong>c₀</strong> are initialized to zero tensors of shape <strong>(hidden_size, batch_size)</strong>. The GPU allocates these on the CuPy device. The model processes the entire batch simultaneously — no per-sample loop — which is the key GPU optimization over naive implementations.
+        </div>
+      </div>
+    </div>
+
+    <div class="step forward">
+      <div class="step-num">
+        <div class="step-circle">F2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Forward Pass · each timestep t = 0…T−1</div>
+        <div class="step-title">Input Concatenation & Outer Gate Computation</div>
+        <div class="step-body">
+          At each timestep, the input slice <strong>x_t</strong> (input_size × batch_size) is transposed and vertically stacked with h_{t-1} to form <strong>z</strong> (hidden+input × batch_size). This single vector is the input to all six gates simultaneously. The four outer gates are then computed in parallel matrix multiplications: <strong>f_t, i_t, c̃_t, o_t</strong>. Three use sigmoid (producing [0,1] gating coefficients) and c̃_t uses tanh (producing bounded candidate content).
+          <div class="step-math">
+            z = vstack(h_{t-1}, x_t)<br>
+            f_t = σ(Wf @ z + bf)<br>
+            i_t = σ(Wi @ z + bi)<br>
+            c̃_t = tanh(Wc @ z + bc)<br>
+            o_t = σ(Wo @ z + bo)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step forward">
+      <div class="step-num">
+        <div class="step-circle">F3</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Forward Pass · each timestep t</div>
+        <div class="step-title">Inner Gate Computation</div>
+        <div class="step-body">
+          Using the same z vector, the two inner gates are computed. These are entirely separate learned transformations — they share the input z but have their own weight matrices Wf_i and Wi_i. This means the inner gates can develop a completely different "opinion" about what to forget and write compared to the outer gates. They typically learn to operate at a different temporal frequency — more slowly varying, since they govern the deeper memory layer.
+          <div class="step-math">
+            f_inner = σ(Wf_i @ z + bf_i)<br>
+            i_inner = σ(Wi_i @ z + bi_i)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step forward">
+      <div class="step-num">
+        <div class="step-circle">F4</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Forward Pass · each timestep t</div>
+        <div class="step-title">Two-Stage Cell State Update</div>
+        <div class="step-body">
+          This is the defining computation of Nested LSTM — two sequential cell state computations instead of one. <strong>Stage 1</strong> runs the standard LSTM cell update to produce c_temp (a provisional cell state). <strong>Stage 2</strong> treats c_temp as a candidate and applies a second gating operation to produce c_t, directly mixing in c_{t-1} via f_inner and filtered c_temp via i_inner. The full cache (z, all gates, c_temp, c_t, h_t, c_prev, h_prev) is stored for BPTT.
+          <div class="step-math">
+            c_temp = f_t ⊙ c_{t-1} + i_t ⊙ c̃_t   ← outer (standard LSTM)<br>
+            c_t    = f_inner ⊙ c_{t-1} + i_inner ⊙ tanh(c_temp)   ← inner (nested)<br>
+            h_t    = o_t ⊙ tanh(c_t)
+          </div>
+          Every intermediate value is cached in a list of tuples, one per timestep, because BPTT will traverse this list in reverse.
+        </div>
+      </div>
+    </div>
+
+    <div class="step forward">
+      <div class="step-num">
+        <div class="step-circle">F5</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Forward Pass · after sequence</div>
+        <div class="step-title">Output Layer & Loss Computation</div>
+        <div class="step-body">
+          After processing all T timesteps, only the <strong>final h_T</strong> is used for prediction (many-to-one). A linear projection followed by sigmoid produces ŷ ∈ (0,1). During training, binary cross-entropy loss is computed with class weighting — positive-class samples are upweighted by the factor cw to handle class imbalance. The gradient of loss w.r.t. output is simply <strong>dy = ŷ − y_true</strong>, scaled by cw for positive samples.
+          <div class="step-math">
+            ŷ = σ(Wy @ h_T + by)<br>
+            L = −[cw · y log(ŷ) + (1−y) log(1−ŷ)]<br>
+            dy = (ŷ − y_true) · cw  [for positive class]
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- BPTT -->
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Backpropagation Through Time</div>
+        <div class="step-title">Output Layer Gradient</div>
+        <div class="step-body">
+          Backprop seeds from the output layer. The gradients for <strong>Wy</strong> and <strong>by</strong> are computed from dy and h_final. Then the gradient flows back into h_final: <strong>dh_next = Wy.T @ dy</strong>. Additionally, a zero tensor dc_next is initialized — this will accumulate the "future cell gradient" as we traverse timesteps in reverse. Both dh_next and dc_next are passed backward through each timestep.
+          <div class="step-math">
+            ∂L/∂Wy = dy @ h_T.T / batch<br>
+            ∂L/∂by = sum(dy) / batch<br>
+            dh_next = Wy.T @ dy
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">BPTT · each timestep in reverse</div>
+        <div class="step-title">Output Gate & Cell State Gradient</div>
+        <div class="step-body">
+          At each timestep (processing from T−1 down to 0): first, the gradient through the output gate. Since h_t = o_t ⊙ tanh(c_t), we get: do = dh ⊙ tanh(c_t) (how much output gate affects loss) and dc_from_h = dh ⊙ o_t ⊙ (1 − tanh²(c_t)) (how loss flows from h back into c). The total cell gradient is <strong>dc = dc_from_h + dc_next</strong>, where dc_next carries gradient from future timesteps through the cell carry.
+          <div class="step-math">
+            do = dh ⊙ tanh(c_t)<br>
+            dc = dh ⊙ o_t ⊙ (1 − tanh²(c_t)) + dc_next<br>
+            da_o = do ⊙ o_t ⊙ (1 − o_t)   ← sigmoid derivative
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B3</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">BPTT · each timestep in reverse</div>
+        <div class="step-title">Inner Gate Gradients (Novel BPTT step)</div>
+        <div class="step-body">
+          This is the most complex gradient step, unique to Nested LSTM. The cell state equation c_t = f_inner ⊙ c_prev + i_inner ⊙ tanh(c_temp) creates gradients for both inner gates and a gradient into c_temp. The inner gates receive their own gradient signals through the standard sigmoid derivative. The key insight: <strong>gradient flows through tanh(c_temp) to reach dc_temp</strong>, which then propagates further to the outer gates.
+          <div class="step-math">
+            di_inner = dc ⊙ tanh(c_temp)<br>
+            df_inner = dc ⊙ c_prev<br>
+            dc_temp  = dc ⊙ i_inner ⊙ (1 − tanh²(c_temp))   ← through tanh
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B4</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">BPTT · each timestep in reverse</div>
+        <div class="step-title">Outer Gate Gradients (via c_temp)</div>
+        <div class="step-body">
+          With dc_temp known, the outer gates receive their gradients. From c_temp = f_t ⊙ c_prev + i_t ⊙ c̃_t: the outer forget gate gradient comes from dc_temp ⊙ c_prev, the outer input gate from dc_temp ⊙ c̃_t, and the candidate gradient from dc_temp ⊙ i_t (then through tanh derivative). Each activation gradient is then projected back through the weight matrix to compute parameter gradients (W and b grads are accumulated across the batch).
+          <div class="step-math">
+            dc̃ = dc_temp ⊙ i_t → da_c = dc̃ ⊙ (1 − c̃_t²)<br>
+            di  = dc_temp ⊙ c̃_t → da_i = di ⊙ i_t ⊙ (1 − i_t)<br>
+            df  = dc_temp ⊙ c_prev → da_f = df ⊙ f_t ⊙ (1 − f_t)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B5</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">BPTT · each timestep in reverse</div>
+        <div class="step-title">Two-Path Cell Carry & Hidden State Gradient</div>
+        <div class="step-body">
+          The critical insight for BPTT: c_prev appears in <strong>two places</strong> — once in c_temp (outer forget path) and once directly in c_t (inner forget path). Therefore, dc_next (the carry-back cell gradient) must sum both contributions. Similarly, dz is computed by multiplying all gate weight matrices transposed against their respective activation gradients. The hidden state carry dh_next is extracted as the first hidden_size rows of dz.
+          <div class="step-math">
+            dz = Wf.T@da_f + Wi.T@da_i + Wc.T@da_c + Wo.T@da_o<br>
+               + Wf_i.T@da_f_inner + Wi_i.T@da_i_inner<br>
+            dh_next  = dz[:hidden_size, :]   ← carries to prev h<br>
+            dc_next  = dc_temp ⊙ f_t + dc ⊙ f_inner   ← two paths!
+          </div>
+          After processing all timesteps, gradients are clipped to [−5, 5] to prevent exploding gradients.
+        </div>
+      </div>
+    </div>
+
+    <div class="step backward">
+      <div class="step-num">
+        <div class="step-circle">B6</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Optimization</div>
+        <div class="step-title">Adam Update with L2 Regularization</div>
+        <div class="step-body">
+          All parameters (10 weight matrices + 10 bias vectors for the Nested LSTM) are updated via Adam. For weight matrices, L2 regularization adds λ · W to the gradient before the Adam moments are computed. Adam maintains separate first (m) and second (v) moment estimates for every parameter, bias-corrected at each step t. This adaptive learning rate is critical for the nested architecture because the inner and outer gates have very different gradient magnitudes and need independent step sizes.
+          <div class="step-math">
+            g_eff = g + λ·W   [for W params]<br>
+            m_k = β1·m_k + (1−β1)·g_eff<br>
+            v_k = β2·v_k + (1−β2)·g_eff²<br>
+            θ_k -= lr · (m_k/(1−β1^t)) / (√(v_k/(1−β2^t)) + ε)
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- INFERENCE -->
+    <div class="step infer">
+      <div class="step-num">
+        <div class="step-circle">I1</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Inference</div>
+        <div class="step-title">Stateless Forward Pass (No Cache)</div>
+        <div class="step-body">
+          At inference time, the model runs the identical forward computation — all six gates, both cell state stages, hidden state update — but <strong>does not store the cache</strong> because there is no backpropagation. Memory footprint drops from O(T × batch × hidden) during training to O(1) since only h and c from the current timestep need to be maintained. The final sigmoid output ŷ is thresholded (typically at 0.5) to produce binary predictions.
+        </div>
+      </div>
+    </div>
+
+    <div class="step infer">
+      <div class="step-num">
+        <div class="step-circle">I2</div>
+        <div class="step-line"></div>
+      </div>
+      <div class="step-content">
+        <div class="step-phase">Inference</div>
+        <div class="step-title">Evaluation Metrics</div>
+        <div class="step-body">
+          The inherited evaluate() method converts GPU arrays back to NumPy (cp.asnumpy()) for metric computation. Predictions are thresholded at 0.5 to yield binary outputs. Standard classification metrics are computed: <strong>accuracy, precision, recall, F1, AUC-ROC</strong>. Given the class-weighted loss during training, the threshold may need tuning at inference time for optimal precision-recall tradeoff, especially on imbalanced datasets.
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ═══════════════════ MATHEMATICS ═══════════════════ -->
+<div class="section" id="tab-math">
+
+  <div class="math-block">
+    <h3>Complete Forward Pass Equations</h3>
+    <div class="math-line">
+      <div class="math-label">Joint input</div>
+      <div class="math-eq"><span class="highlight-outer">z_t</span> = [h_{t−1} ; x_t] ∈ ℝ^{(H+D)×B}</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Outer forget</div>
+      <div class="math-eq"><span class="highlight-outer">f_t</span> = σ(W_f · z_t + b_f)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Outer input</div>
+      <div class="math-eq"><span class="highlight-outer">i_t</span> = σ(W_i · z_t + b_i)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Candidate</div>
+      <div class="math-eq"><span class="highlight-outer">c̃_t</span> = tanh(W_c · z_t + b_c)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Outer output</div>
+      <div class="math-eq"><span class="highlight-outer">o_t</span> = σ(W_o · z_t + b_o)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Inner forget</div>
+      <div class="math-eq"><span class="highlight-inner">f_inner</span> = σ(W_fi · z_t + b_fi)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Inner input</div>
+      <div class="math-eq"><span class="highlight-inner">i_inner</span> = σ(W_ii · z_t + b_ii)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Temp cell state</div>
+      <div class="math-eq"><span class="highlight-cell">c_temp</span> = f_t ⊙ c_{t−1} + i_t ⊙ c̃_t</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Final cell state</div>
+      <div class="math-eq"><span class="highlight-cell">c_t</span> = f_inner ⊙ c_{t−1} + i_inner ⊙ tanh(c_temp)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Hidden state</div>
+      <div class="math-eq"><span class="highlight-out">h_t</span> = o_t ⊙ tanh(c_t)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Prediction (final t)</div>
+      <div class="math-eq"><span class="highlight-out">ŷ</span> = σ(W_y · h_T + b_y)</div>
+    </div>
+  </div>
+
+  <div class="math-block">
+    <h3>Key Backward Pass Equations (BPTT)</h3>
+    <div class="math-line">
+      <div class="math-label">Output gradient</div>
+      <div class="math-eq">dy = (ŷ − y) [× cw if y=1]</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Cell state gradient</div>
+      <div class="math-eq">dc = dh ⊙ o_t ⊙ sech²(c_t) + dc_next</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">c_temp gradient</div>
+      <div class="math-eq">dc_temp = dc ⊙ i_inner ⊙ sech²(c_temp)</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">c_prev gradient — DUAL PATH</div>
+      <div class="math-eq">dc_prev = dc_temp ⊙ f_t  +  dc ⊙ f_inner</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Adam effective gradient</div>
+      <div class="math-eq">g_eff = ∂L/∂W + λ·W</div>
+    </div>
+  </div>
+
+  <div class="math-block">
+    <h3>Parameter Count</h3>
+    <div class="math-line">
+      <div class="math-label">Per gate (W)</div>
+      <div class="math-eq">H × (H + D) parameters</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Outer gates total</div>
+      <div class="math-eq">4 × H × (H + D) + 4H — same as standard LSTM</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Inner gates added</div>
+      <div class="math-eq">2 × H × (H + D) + 2H — 50% extra vs. standard LSTM gates</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Output layer</div>
+      <div class="math-eq">H × O + O</div>
+    </div>
+    <div class="math-line">
+      <div class="math-label">Total parameters</div>
+      <div class="math-eq">6H(H+D) + 6H + HO + O</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ═══════════════════ COMPARISON ═══════════════════ -->
+<div class="section" id="tab-compare">
+  <table class="compare-table">
+    <thead>
+      <tr>
+        <th>Aspect</th>
+        <th>Standard LSTM</th>
+        <th>Nested LSTM (this model)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Cell state equation</td>
+        <td>c_t = f ⊙ c_{t-1} + i ⊙ c̃_t — one step</td>
+        <td>c_temp first, then c_t = f_inner ⊙ c_{t-1} + i_inner ⊙ tanh(c_temp) — two steps, nested</td>
+      </tr>
+      <tr>
+        <td>Number of gates</td>
+        <td>4 (f, i, c̃, o)</td>
+        <td>6 (f, i, c̃, o + f_inner, i_inner)</td>
+      </tr>
+      <tr>
+        <td>Parameter overhead</td>
+        <td>Baseline</td>
+        <td>+50% additional gate parameters (2 extra weight matrices)</td>
+      </tr>
+      <tr>
+        <td>Memory hierarchy</td>
+        <td>Single-level cell state</td>
+        <td>Two-level: outer (fast, c_temp) + inner (slow, c_t bypass)</td>
+      </tr>
+      <tr>
+        <td>c_prev in gradients</td>
+        <td>Single path: through f ⊙ c_prev in c_t</td>
+        <td>Dual path: through f_t (via c_temp) AND through f_inner (direct)</td>
+      </tr>
+      <tr>
+        <td>Temporal abstraction</td>
+        <td>One timescale governed by single forget gate</td>
+        <td>Two timescales: f_t (outer, fast) and f_inner (inner, slow bypass)</td>
+      </tr>
+      <tr>
+        <td>Output gate</td>
+        <td>Reads from c_t</td>
+        <td>Reads from c_t — identical, but c_t is hierarchically richer</td>
+      </tr>
+      <tr>
+        <td>BPTT complexity</td>
+        <td>One chain of cell carry dc_next = dc ⊙ f</td>
+        <td>dc_next = dc_temp ⊙ f_t + dc ⊙ f_inner (two additive paths)</td>
+      </tr>
+      <tr>
+        <td>Gradient flow</td>
+        <td>Can vanish when f_t is small</td>
+        <td>f_inner provides an additional direct highway for gradients through c_prev</td>
+      </tr>
+      <tr>
+        <td>When to prefer</td>
+        <td>Standard sequential data, lower compute budget</td>
+        <td>Long sequences with hierarchical temporal structure (e.g. sentences in paragraphs, beats in music, ticks in market sessions)</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+</div><!-- end page -->
+
+<script>
+function showTab(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + id).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+</body>
+</html>
