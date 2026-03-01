@@ -28,6 +28,7 @@ warnings.filterwarnings('ignore')
 PROJECT_ROOT = Path(__file__).parent.parent
 OUTPUT_DIR = PROJECT_ROOT / "data" / "output"
 ANALYSIS_DIR = PROJECT_ROOT / "data" / "analysis"
+CHECKPOINTS_DIR = PROJECT_ROOT / "src" / "model" / "checkpoints"
 ANALYSIS_DIR.mkdir(exist_ok=True)
 
 
@@ -233,8 +234,36 @@ def analyze_temporal_leadtime(y_test: np.ndarray, y_prob: np.ndarray,
     return results
 
 
+def find_model_checkpoint(experiment_name: str, window: int = 48, interval: str = "30min") -> Optional[Path]:
+    """Find model checkpoint file for an experiment."""
+    # Try different naming patterns
+    patterns = [
+        f"lstm_attention_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_nested_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_optimized_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_bidirectional_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_peephole_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_cifg_{interval}_win{window}_{experiment_name}.pkl",
+        f"lstm_*_{interval}_win{window}_{experiment_name}.pkl",
+    ]
+
+    for pattern in patterns:
+        matches = list(CHECKPOINTS_DIR.glob(pattern))
+        if matches:
+            return matches[0]
+
+    # Try partial match
+    for f in CHECKPOINTS_DIR.glob("*.pkl"):
+        if experiment_name in f.name and f"{interval}_win{window}" in f.name:
+            return f
+
+    return None
+
+
 def analyze_attention_patterns(experiment_name: str, window: int = 48,
-                               interval: str = "30min", sample_size: int = 100) -> Dict:
+                               interval: str = "30min", sample_size: int = 100,
+                               X_test: Optional[np.ndarray] = None,
+                               y_test: Optional[np.ndarray] = None) -> Dict:
     """
     Strategy 4: Attention Heatmap Analysis
 
@@ -242,54 +271,217 @@ def analyze_attention_patterns(experiment_name: str, window: int = 48,
     the model focuses on. If model only attends to recent steps, it ignores
     long-term trends.
     """
-    # Try to load model and get attention weights
-    exp_dir = OUTPUT_DIR / f"{interval}_win{window}_{experiment_name}"
-    model_file = exp_dir / f"model_{interval}_win{window}_{experiment_name}.pkl"
+    import pickle
+
+    # Find model checkpoint
+    model_file = find_model_checkpoint(experiment_name, window, interval)
 
     results = {
-        'model_found': model_file.exists(),
-        'attention_analysis': None
+        'model_found': model_file is not None,
+        'attention_analysis': None,
+        'model_path': str(model_file) if model_file else None
     }
 
-    if not model_file.exists():
-        results['note'] = f'Model file not found: {model_file}'
-        results['manual_analysis_suggestion'] = '''
-To analyze attention weights manually:
-1. Load the model using pickle
-2. Prepare a batch of test sequences
-3. Call model.get_attention_weights(X_batch)
-4. Analyze the resulting (batch_size, seq_len) attention matrix
-'''
+    if model_file is None:
+        results['note'] = f'No model checkpoint found for {experiment_name}'
+        results['searched_in'] = str(CHECKPOINTS_DIR)
         return results
 
-    # If model exists, provide analysis template
-    results['analysis_template'] = '''
-# Code to analyze attention weights:
-import pickle
-import numpy as np
+    # Check if model has attention mechanism
+    if 'attention' not in str(model_file).lower() and 'Attention' not in experiment_name:
+        results['note'] = 'Model does not appear to have attention mechanism'
+        results['model_type'] = model_file.stem.split('_')[1] if '_' in model_file.stem else 'unknown'
+        return results
 
-with open(model_path, 'rb') as f:
-    model = pickle.load(f)
+    # Load model
+    try:
+        with open(model_file, 'rb') as f:
+            model = pickle.load(f)
+    except Exception as e:
+        results['error'] = f'Failed to load model: {str(e)}'
+        return results
 
-# Get attention weights for test samples
-attention_weights = model.get_attention_weights(X_test[:100])
+    # Check if model has get_attention_weights method
+    if not hasattr(model, 'get_attention_weights'):
+        results['note'] = 'Model does not have get_attention_weights method'
+        results['available_methods'] = [m for m in dir(model) if not m.startswith('_')]
+        return results
 
-# Analyze temporal focus
-mean_attention = attention_weights.mean(axis=0)  # Average over samples
-recent_focus = mean_attention[-12:].sum()  # Last 6 hours (12 * 30min)
-historical_focus = mean_attention[:-12].sum()  # Earlier history
+    # Need test data to analyze attention
+    if X_test is None:
+        results['note'] = 'X_test data required for attention analysis. Pass X_test parameter.'
+        results['model_loaded'] = True
+        return results
 
-# If recent_focus >> historical_focus, model ignores long-term patterns
-'''
+    # Get attention weights
+    try:
+        # Sample subset for analysis
+        n_samples = min(sample_size, len(X_test))
+        indices = np.random.choice(len(X_test), n_samples, replace=False)
+        X_sample = X_test[indices]
+        y_sample = y_test[indices] if y_test is not None else None
 
-    # Simulate attention analysis based on typical patterns
-    results['typical_patterns'] = {
-        'healthy_attention': 'Spread across window with peaks at key degradation points',
-        'concerning_attention': 'Concentrated only on last few timesteps',
-        'ideal_distribution': 'Bimodal - peaks at recent history AND key historical patterns'
-    }
+        attention_weights = model.get_attention_weights(X_sample)
+        # attention_weights shape: (batch_size, seq_len)
+
+        mean_attention = attention_weights.mean(axis=0)
+
+        # Analyze temporal focus patterns
+        seq_len = len(mean_attention)
+        quarter = seq_len // 4
+
+        # Split into quarters
+        q1_focus = mean_attention[:quarter].sum()  # Oldest history
+        q2_focus = mean_attention[quarter:2*quarter].sum()
+        q3_focus = mean_attention[2*quarter:3*quarter].sum()
+        q4_focus = mean_attention[3*quarter:].sum()  # Most recent
+
+        # Recent vs historical
+        recent_focus = mean_attention[-12:].sum()  # Last 6 hours (12 * 30min)
+        historical_focus = mean_attention[:-12].sum()
+
+        # Analyze by class if y_test provided
+        class_analysis = None
+        if y_sample is not None:
+            normal_indices = np.where(y_sample == 0)[0]
+            incident_indices = np.where(y_sample == 1)[0]
+
+            if len(normal_indices) > 0 and len(incident_indices) > 0:
+                normal_attention = attention_weights[normal_indices].mean(axis=0)
+                incident_attention = attention_weights[incident_indices].mean(axis=0)
+
+                class_analysis = {
+                    'normal_recent_focus': float(normal_attention[-12:].sum()),
+                    'incident_recent_focus': float(incident_attention[-12:].sum()),
+                    'normal_historical_focus': float(normal_attention[:-12].sum()),
+                    'incident_historical_focus': float(incident_attention[:-12].sum()),
+                    'incident_focuses_more_recent': bool(incident_attention[-12:].sum() > normal_attention[-12:].sum())
+                }
+
+        # Peak detection - find timesteps with highest attention
+        peak_threshold = mean_attention.mean() + mean_attention.std()
+        peak_indices = np.where(mean_attention > peak_threshold)[0]
+        peak_hours_before = [(seq_len - idx) * 0.5 for idx in peak_indices]  # Convert to hours
+
+        results['attention_analysis'] = {
+            'temporal_distribution': {
+                'q1_oldest_25pct': float(q1_focus),
+                'q2_25_50pct': float(q2_focus),
+                'q3_50_75pct': float(q3_focus),
+                'q4_recent_25pct': float(q4_focus),
+            },
+            'focus_ratio': {
+                'recent_6h': float(recent_focus),
+                'historical': float(historical_focus),
+                'recent_to_historical_ratio': float(recent_focus / historical_focus) if historical_focus > 0 else float('inf')
+            },
+            'peak_attention': {
+                'peak_timesteps': peak_indices.tolist(),
+                'peak_hours_before_prediction': peak_hours_before,
+                'num_peaks': len(peak_indices)
+            },
+            'statistics': {
+                'mean': float(mean_attention.mean()),
+                'std': float(mean_attention.std()),
+                'max': float(mean_attention.max()),
+                'max_timestep': int(np.argmax(mean_attention)),
+                'entropy': float(-np.sum(mean_attention * np.log(mean_attention + 1e-9)))
+            },
+            'class_analysis': class_analysis,
+            'raw_mean_attention': mean_attention.tolist()
+        }
+
+        # Interpretation
+        if recent_focus / (historical_focus + 1e-9) > 2:
+            results['interpretation'] = 'Model heavily focuses on recent history (last 6h). May miss long-term degradation patterns.'
+            results['weakness'] = 'Short-term bias - model acts like instant classifier, not sequence processor'
+        elif q4_focus > q1_focus + q2_focus:
+            results['interpretation'] = 'Model biased toward recent timesteps. Some historical context used but limited.'
+            results['weakness'] = 'Moderate recency bias'
+        else:
+            results['interpretation'] = 'Model uses balanced attention across time window. Good sequence processing.'
+            results['weakness'] = None
+
+        # Save attention heatmap
+        save_attention_heatmap(attention_weights, y_sample, experiment_name, window, interval)
+        results['heatmap_saved'] = str(ANALYSIS_DIR / f"attention_heatmap_{experiment_name}.png")
+
+    except Exception as e:
+        results['error'] = f'Failed to compute attention: {str(e)}'
+        import traceback
+        results['traceback'] = traceback.format_exc()
 
     return results
+
+
+def save_attention_heatmap(attention_weights: np.ndarray, y_test: Optional[np.ndarray],
+                           experiment_name: str, window: int, interval: str):
+    """Save attention heatmap visualization."""
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    seq_len = attention_weights.shape[1]
+    time_labels = [f'-{(seq_len - i) * 0.5:.1f}h' for i in range(0, seq_len, max(1, seq_len // 8))]
+
+    # 1. Mean attention over time
+    mean_attention = attention_weights.mean(axis=0)
+    axes[0, 0].bar(range(seq_len), mean_attention, color='steelblue', alpha=0.7)
+    axes[0, 0].set_xlabel('Timestep (30min intervals)')
+    axes[0, 0].set_ylabel('Mean Attention Weight')
+    axes[0, 0].set_title('Average Attention Distribution Over Time')
+    axes[0, 0].axvline(x=seq_len - 12, color='red', linestyle='--', alpha=0.5, label='Last 6h')
+    axes[0, 0].legend()
+
+    # 2. Attention heatmap (subset of samples)
+    n_show = min(50, len(attention_weights))
+    sns.heatmap(attention_weights[:n_show], ax=axes[0, 1], cmap='YlOrRd',
+                cbar_kws={'label': 'Attention Weight'})
+    axes[0, 1].set_xlabel('Timestep')
+    axes[0, 1].set_ylabel('Sample')
+    axes[0, 1].set_title(f'Attention Heatmap (first {n_show} samples)')
+
+    # 3. Attention by class (if y_test provided)
+    if y_test is not None:
+        normal_mask = y_test == 0
+        incident_mask = y_test == 1
+
+        if np.sum(normal_mask) > 0 and np.sum(incident_mask) > 0:
+            normal_mean = attention_weights[normal_mask].mean(axis=0)
+            incident_mean = attention_weights[incident_mask].mean(axis=0)
+
+            x = np.arange(seq_len)
+            width = 0.4
+            axes[1, 0].bar(x - width/2, normal_mean, width, label='Normal', color='green', alpha=0.7)
+            axes[1, 0].bar(x + width/2, incident_mean, width, label='Incident', color='red', alpha=0.7)
+            axes[1, 0].set_xlabel('Timestep')
+            axes[1, 0].set_ylabel('Mean Attention Weight')
+            axes[1, 0].set_title('Attention by Class')
+            axes[1, 0].legend()
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No class labels provided', ha='center', va='center')
+        axes[1, 0].set_title('Attention by Class (unavailable)')
+
+    # 4. Cumulative attention
+    cumsum = np.cumsum(mean_attention)
+    axes[1, 1].plot(range(seq_len), cumsum, 'b-', linewidth=2)
+    axes[1, 1].axhline(y=0.5, color='red', linestyle='--', alpha=0.5, label='50% attention')
+    axes[1, 1].axhline(y=0.9, color='orange', linestyle='--', alpha=0.5, label='90% attention')
+    # Find where 50% and 90% attention is reached
+    idx_50 = np.searchsorted(cumsum, 0.5)
+    idx_90 = np.searchsorted(cumsum, 0.9)
+    axes[1, 1].axvline(x=idx_50, color='red', linestyle=':', alpha=0.5)
+    axes[1, 1].axvline(x=idx_90, color='orange', linestyle=':', alpha=0.5)
+    axes[1, 1].set_xlabel('Timestep')
+    axes[1, 1].set_ylabel('Cumulative Attention')
+    axes[1, 1].set_title(f'Cumulative Attention (50% at t={idx_50}, 90% at t={idx_90})')
+    axes[1, 1].legend()
+
+    plt.suptitle(f'Attention Analysis: {experiment_name}', fontsize=14, fontweight='bold')
+    plt.tight_layout()
+
+    save_path = ANALYSIS_DIR / f"attention_heatmap_{experiment_name}.png"
+    plt.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved attention heatmap to: {save_path}")
 
 
 def compare_feature_sets(experiments: List[str], window: int = 48,
@@ -426,6 +618,23 @@ def plot_failure_distribution(y_test: np.ndarray, y_prob: np.ndarray,
     plt.close()
 
 
+def load_X_test(experiment_name: str, window: int = 48, interval: str = "30min") -> Optional[np.ndarray]:
+    """Try to load X_test data for attention analysis."""
+    exp_dir = OUTPUT_DIR / f"{interval}_win{window}_{experiment_name}"
+
+    # Try to find X_test file
+    x_test_files = list(exp_dir.glob("X_test_*.npy"))
+    if x_test_files:
+        return np.load(x_test_files[0])
+
+    # Try alternative naming
+    x_test_files = list(exp_dir.glob("*X_test*.npy"))
+    if x_test_files:
+        return np.load(x_test_files[0])
+
+    return None
+
+
 def run_full_analysis(experiment_name: str, window: int = 48,
                       interval: str = "30min") -> Dict:
     """Run all 5 analysis strategies for a single experiment."""
@@ -440,6 +649,13 @@ def run_full_analysis(experiment_name: str, window: int = 48,
 
     print(f"Loaded {len(y_test)} samples")
     print(f"Class distribution: Normal={np.sum(y_test==0)}, Incident={np.sum(y_test==1)}")
+
+    # Try to load X_test for attention analysis
+    X_test = load_X_test(experiment_name, window, interval)
+    if X_test is not None:
+        print(f"Loaded X_test: shape={X_test.shape}")
+    else:
+        print("X_test not found - attention analysis will be limited")
 
     results = {
         'experiment': experiment_name,
@@ -461,7 +677,10 @@ def run_full_analysis(experiment_name: str, window: int = 48,
 
     # Strategy 4: Attention Pattern Analysis
     print("[4/5] Analyzing Attention Patterns...")
-    results['attention'] = analyze_attention_patterns(experiment_name, window, interval)
+    results['attention'] = analyze_attention_patterns(
+        experiment_name, window, interval,
+        X_test=X_test, y_test=y_test
+    )
 
     # Generate plots
     print("[5/5] Generating Visualizations...")
